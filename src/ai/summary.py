@@ -1,0 +1,150 @@
+import json
+import requests
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+
+from ..config import config
+
+
+class AISummary:
+    def __init__(self):
+        self.api_base = config.api_base.rstrip('/')
+        self.api_key = config.api_key
+        self.model = config.model
+        self.max_tokens = config.get("ai.max_tokens", 1000)
+        self.temperature = config.get("ai.temperature", 0.7)
+
+    def _make_api_request(self, messages: List[Dict[str, str]],
+                         max_tokens: Optional[int] = None) -> Optional[str]:
+        if not self.api_key:
+            return "错误：未配置API密钥，请在config.json中设置ai.api_key"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens or self.max_tokens,
+            "temperature": self.temperature
+        }
+
+        try:
+            response = requests.post(
+                f"{self.api_base}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+
+        except requests.exceptions.RequestException as e:
+            return f"API请求失败: {str(e)}"
+        except (KeyError, IndexError) as e:
+            return f"API响应解析失败: {str(e)}"
+
+    def format_messages_for_summary(self, messages: List[Dict[str, Any]]) -> str:
+        formatted_msgs = []
+        for msg in messages:
+            timestamp = msg.get('timestamp', '')
+            user = msg.get('user', 'Unknown')
+            text = msg.get('text', '')
+
+            if text:
+                try:
+                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    time_str = dt.strftime("%H:%M")
+                    formatted_msgs.append(f"[{time_str}] {user}: {text}")
+                except:
+                    formatted_msgs.append(f"{user}: {text}")
+
+        return "\n".join(formatted_msgs)
+
+    def generate_summary(self, messages: List[Dict[str, Any]],
+                        summary_type: str = "daily") -> Optional[str]:
+        if not messages:
+            return "没有消息可以总结"
+
+        formatted_messages = self.format_messages_for_summary(messages)
+
+        if summary_type == "daily":
+            system_prompt = """你是一个专业的消息总结助手。请根据提供的群组聊天消息，生成一份简洁但全面的每日总结。
+
+总结要求：
+1. 按话题分类讨论内容
+2. 提及重要的决策或结论
+3. 突出有趣的讨论或观点
+4. 总结整体氛围和活跃程度
+5. 用中文回复，格式清晰易读
+
+请开始总结："""
+        else:
+            system_prompt = """你是一个专业的消息总结助手。请根据提供的群组聊天消息，生成一份简洁的总结。
+
+总结要求：
+1. 提取主要讨论话题
+2. 总结重要信息
+3. 突出关键观点
+4. 用中文回复，格式清晰易读
+
+请开始总结："""
+
+        api_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"以下是群组消息记录：\n\n{formatted_messages}"}
+        ]
+
+        return self._make_api_request(api_messages)
+
+    def generate_daily_summary(self, chat_id: int, messages: List[Dict[str, Any]]) -> Optional[str]:
+        summary = self.generate_summary(messages, "daily")
+
+        if summary and not summary.startswith("错误") and not summary.startswith("没有消息"):
+            date_str = datetime.now().strftime("%Y-%m-%d")
+
+            header = f"📊 **群组每日总结** ({date_str})\n"
+            header += f"📝 消息总数: {len(messages)} 条\n"
+
+            user_counts = {}
+            for msg in messages:
+                user = msg.get('user', 'Unknown')
+                user_counts[user] = user_counts.get(user, 0) + 1
+
+            if user_counts:
+                top_users = sorted(user_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                header += f"👥 活跃用户: {', '.join([f'{user}({count})' for user, count in top_users])}\n\n"
+
+            return header + summary
+
+        return summary
+
+    def generate_manual_summary(self, chat_id: int, messages: List[Dict[str, Any]],
+                              hours: int = 24) -> Optional[str]:
+        summary = self.generate_summary(messages, "manual")
+
+        if summary and not summary.startswith("错误") and not summary.startswith("没有消息"):
+            date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+            header = f"📋 **最近{hours}小时消息总结** ({date_str})\n"
+            header += f"📝 消息数量: {len(messages)} 条\n\n"
+
+            return header + summary
+
+        return summary
+
+    def test_connection(self) -> bool:
+        test_messages = [
+            {"role": "system", "content": "你是一个测试助手。"},
+            {"role": "user", "content": "请回复'连接成功'"}
+        ]
+
+        response = self._make_api_request(test_messages, max_tokens=50)
+        return response and "连接成功" in response
+
+
+__all__ = ['AISummary']

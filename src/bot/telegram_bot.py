@@ -1,0 +1,293 @@
+import asyncio
+import logging
+from datetime import datetime, date
+from typing import Optional, List
+
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ParseMode
+
+from ..config import config
+from ..storage import MessageStorage
+from ..ai import AISummary
+from ..scheduler import DailySummaryScheduler
+
+
+class TelegramBot:
+    def __init__(self):
+        self.bot_token = config.bot_token
+        self.allowed_chats = config.allowed_chats
+        self.storage = MessageStorage()
+        self.ai_summary = AISummary()
+        self.scheduler = DailySummaryScheduler(self)
+        self.application = None
+
+        logging.basicConfig(
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            level=getattr(logging, config.get("logging.level", "INFO"))
+        )
+        self.logger = logging.getLogger(__name__)
+
+    def is_allowed_chat(self, chat_id: int) -> bool:
+        return not self.allowed_chats or chat_id in self.allowed_chats
+
+    def extract_message_info(self, update: Update) -> Optional[dict]:
+        if not update.message or not update.message.text:
+            return None
+
+        message = update.message
+        user_name = message.from_user.full_name if message.from_user else "Unknown"
+        chat_id = message.chat.id
+
+        if not self.is_allowed_chat(chat_id):
+            return None
+
+        return {
+            "user": user_name,
+            "text": message.text,
+            "chat_id": chat_id,
+            "message_id": message.message_id,
+            "type": "text"
+        }
+
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self.is_allowed_chat(update.effective_chat.id):
+            return
+
+        welcome_text = """
+🤖 Telegram群组总结机器人已启动！
+
+可用命令：
+/summary - 生成最近消息总结
+/stats - 查看今日统计
+/help - 显示帮助信息
+
+机器人的功能：
+• 自动保存群组消息
+• 每日自动生成总结
+• 支持手动总结最近消息
+• 可配置AI API地址和模型
+        """
+
+        await update.message.reply_text(welcome_text)
+
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self.is_allowed_chat(update.effective_chat.id):
+            return
+
+        help_text = """
+📋 **命令帮助**
+
+/start - 启动机器人
+/summary - 总结最近消息（默认100条，24小时内）
+/summary [数量] - 总结指定数量的最近消息
+/stats - 显示今日群组统计信息
+/help - 显示此帮助信息
+
+**配置说明：**
+• 在config.json中设置机器人token
+• 配置允许的群组ID
+• 设置AI API地址和密钥
+• 自定义总结参数
+
+**功能特性：**
+• 每个群组消息独立存储
+• 每日自动生成总结
+• 支持自定义API地址
+• 消息按日期分文件存储
+        """
+
+        await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+
+    async def summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = update.effective_chat.id
+
+        if not self.is_allowed_chat(chat_id):
+            return
+
+        await update.message.reply_text("🔄 正在生成总结，请稍候...")
+
+        try:
+            message_count = config.manual_summary_message_count
+            hours = config.manual_summary_hours
+
+            if context.args:
+                try:
+                    if len(context.args) == 1:
+                        message_count = int(context.args[0])
+                    elif len(context.args) == 2:
+                        message_count = int(context.args[0])
+                        hours = int(context.args[1])
+                except ValueError:
+                    pass
+
+            messages = self.storage.get_latest_messages(chat_id, message_count)
+
+            if not messages:
+                await update.message.reply_text("📭 没有找到可以总结的消息")
+                return
+
+            recent_messages = [msg for msg in messages
+                             if (datetime.now() - datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))).total_seconds() <= hours * 3600]
+
+            if not recent_messages:
+                await update.message.reply_text(f"📭 最近{hours}小时内没有消息")
+                return
+
+            summary = self.ai_summary.generate_manual_summary(chat_id, recent_messages, hours)
+
+            if summary:
+                if len(summary) > 4000:
+                    for i in range(0, len(summary), 4000):
+                        chunk = summary[i:i+4000]
+                        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+                else:
+                    await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
+            else:
+                await update.message.reply_text("❌ 生成总结失败")
+
+        except Exception as e:
+            self.logger.error(f"Error in summary command: {e}")
+            await update.message.reply_text(f"❌ 生成总结时出错: {str(e)}")
+
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = update.effective_chat.id
+
+        if not self.is_allowed_chat(chat_id):
+            return
+
+        try:
+            stats = self.storage.get_daily_stats(chat_id, date.today())
+            recent_count = self.storage.get_message_count(chat_id, 24)
+
+            stats_text = f"""
+📊 **今日群组统计** ({date.today().strftime('%Y-%m-%d')})
+
+💬 消息总数: {stats['message_count']} 条
+👥 活跃用户: {stats['user_count']} 人
+📈 24小时消息: {recent_count} 条
+"""
+
+            if stats['users']:
+                stats_text += "\n🏆 **活跃用户排行:**\n"
+                for i, (user, count) in enumerate(stats['users'][:10], 1):
+                    stats_text += f"{i}. {user}: {count} 条消息\n"
+
+            await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
+
+        except Exception as e:
+            self.logger.error(f"Error in stats command: {e}")
+            await update.message.reply_text(f"❌ 获取统计信息时出错: {str(e)}")
+
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message_info = self.extract_message_info(update)
+
+        if not message_info:
+            return
+
+        try:
+            self.storage.save_message(message_info['chat_id'], message_info)
+
+        except Exception as e:
+            self.logger.error(f"Error saving message: {e}")
+
+    async def send_daily_summary(self, chat_id: int) -> None:
+        try:
+            messages = self.storage.load_messages(chat_id, date.today())
+
+            if not messages:
+                return
+
+            summary = self.ai_summary.generate_daily_summary(chat_id, messages)
+
+            if summary:
+                await self.application.bot.send_message(
+                    chat_id=chat_id,
+                    text=summary,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                self.logger.info(f"Daily summary sent to chat {chat_id}")
+
+        except Exception as e:
+            self.logger.error(f"Error sending daily summary to chat {chat_id}: {e}")
+
+    def setup_handlers(self) -> None:
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("help", self.help_command))
+        self.application.add_handler(CommandHandler("summary", self.summary_command))
+        self.application.add_handler(CommandHandler("stats", self.stats_command))
+
+        self.application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
+        )
+
+    async def start(self) -> None:
+        if not self.bot_token:
+            self.logger.error("Bot token not configured!")
+            return
+
+        try:
+            self.application = Application.builder().token(self.bot_token).build()
+
+            self.setup_handlers()
+
+            if config.daily_summary_enabled:
+                self.scheduler.start()
+                self.logger.info(f"Daily summary scheduled at {config.daily_summary_time}")
+
+            self.logger.info("Bot started successfully!")
+
+            await self.application.initialize()
+            await self.application.start()
+            await self.application.updater.start_polling(drop_pending_updates=True)
+
+            # 保持机器人运行
+            self.logger.info("Bot is now running. Press Ctrl+C to stop.")
+            while True:
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            self.logger.error(f"Error starting bot: {e}")
+            # 简化异常处理，避免在异常时进行复杂清理
+            self.logger.info("Bot will exit due to error")
+
+    def stop(self) -> None:
+        self.logger.info("Stopping bot...")
+
+        if self.scheduler:
+            self.scheduler.stop()
+
+        if self.application:
+            try:
+                # 尝试获取当前事件循环，但不强制
+                loop = None
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    pass
+
+                if loop and not loop.is_closed():
+                    if loop.is_running():
+                        loop.create_task(self._cleanup())
+                    else:
+                        loop.run_until_complete(self._cleanup())
+                else:
+                    # 事件循环已关闭，只进行简单清理
+                    self.logger.info("Event loop closed, skipping async cleanup")
+
+            except Exception as e:
+                self.logger.error(f"Error during cleanup: {e}")
+
+        self.logger.info("Bot stopped")
+
+    async def _cleanup(self):
+        if self.application:
+            try:
+                # 只关闭updater，避免完全关闭application
+                if hasattr(self.application, 'updater') and self.application.updater:
+                    await self.application.updater.stop()
+            except Exception as e:
+                self.logger.error(f"Error during cleanup: {e}")
+
+
+__all__ = ['TelegramBot']
