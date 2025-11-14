@@ -15,13 +15,14 @@
 
 ### 1. 克隆项目
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/Algacez/tgsummarizer.git
 cd tgsummarizer
 ```
 
 ### 2. 安装依赖
 ```bash
 uv venv
+uv pip install -r requirements.txt
 ```
 
 ```bash

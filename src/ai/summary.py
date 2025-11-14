@@ -32,21 +32,49 @@ class AISummary:
         }
 
         try:
+            print(f"Making API request to: {self.api_base}/chat/completions")
+            print(f"Model: {self.model}, Max tokens: {max_tokens or self.max_tokens}")
+            print(f"Messages count: {len(messages)}")
+
             response = requests.post(
                 f"{self.api_base}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=30
+                timeout=60  # 增加超时时间
             )
-            response.raise_for_status()
+
+            print(f"Response status: {response.status_code}")
+
+            if response.status_code != 200:
+                print(f"Response body: {response.text}")
+                return f"API请求失败: HTTP {response.status_code} - {response.text[:200]}"
 
             result = response.json()
-            return result["choices"][0]["message"]["content"]
 
+            if "choices" not in result or not result["choices"]:
+                print(f"Invalid API response: {result}")
+                return "API响应格式错误：缺少choices字段"
+
+            if "message" not in result["choices"][0]:
+                print(f"Invalid choice format: {result['choices'][0]}")
+                return "API响应格式错误：缺少message字段"
+
+            content = result["choices"][0]["message"]["content"]
+            print(f"Successfully got response, length: {len(content)}")
+            return content
+
+        except requests.exceptions.Timeout:
+            return "API请求超时：请检查网络连接或稍后重试"
+        except requests.exceptions.ConnectionError as e:
+            return f"网络连接错误: {str(e)}"
         except requests.exceptions.RequestException as e:
             return f"API请求失败: {str(e)}"
+        except json.JSONDecodeError as e:
+            return f"JSON解析失败: {str(e)}"
         except (KeyError, IndexError) as e:
             return f"API响应解析失败: {str(e)}"
+        except Exception as e:
+            return f"未知错误: {str(e)}"
 
     def format_messages_for_summary(self, messages: List[Dict[str, Any]]) -> str:
         formatted_msgs = []

@@ -28,6 +28,52 @@ class TelegramBot:
         )
         self.logger = logging.getLogger(__name__)
 
+    async def safe_send_message(self, chat_id, text, update=None):
+        """安全发送消息，自动处理Markdown错误"""
+        try:
+            # 首先尝试带Markdown格式
+            if update:
+                return await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+            else:
+                return await self.application.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e:
+            self.logger.warning(f"Markdown parse error, sending as plain text: {e}")
+            try:
+                # 如果Markdown失败，发送纯文本
+                clean_text = self.clean_markdown(text)
+                if update:
+                    return await update.message.reply_text(clean_text)
+                else:
+                    return await self.application.bot.send_message(chat_id=chat_id, text=clean_text)
+            except Exception as e2:
+                self.logger.error(f"Failed to send message: {e2}")
+                return None
+
+    async def split_and_send(self, chat_id, text, update=None):
+        """分割长消息并发送"""
+        if len(text) > 4000:
+            chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for i, chunk in enumerate(chunks):
+                await self.safe_send_message(chat_id, chunk, update)
+                if i < len(chunks) - 1:
+                    await asyncio.sleep(1)  # 避免发送太快
+        else:
+            await self.safe_send_message(chat_id, text, update)
+
+    def clean_markdown(self, text):
+        """清理可能有问题的Markdown字符"""
+        # 转义特殊字符
+        special_chars = ['*', '_', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        cleaned = text
+
+        # 简单的转义处理
+        for char in special_chars:
+            if char in ['*', '_', '`']:
+                # 对于可能导致配对问题的字符，进行转义
+                cleaned = cleaned.replace(char, f'\\{char}')
+
+        return cleaned
+
     def is_allowed_chat(self, chat_id: int) -> bool:
         return not self.allowed_chats or chat_id in self.allowed_chats
 
@@ -121,7 +167,9 @@ class TelegramBot:
                 except ValueError:
                     pass
 
+            print(f"Looking for messages: count={message_count}, hours={hours}")
             messages = self.storage.get_latest_messages(chat_id, message_count)
+            print(f"Found {len(messages)} total messages")
 
             if not messages:
                 await update.message.reply_text("📭 没有找到可以总结的消息")
@@ -129,20 +177,18 @@ class TelegramBot:
 
             recent_messages = [msg for msg in messages
                              if (datetime.now() - datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))).total_seconds() <= hours * 3600]
+            print(f"Found {len(recent_messages)} messages in last {hours} hours")
 
             if not recent_messages:
                 await update.message.reply_text(f"📭 最近{hours}小时内没有消息")
                 return
 
+            print("Calling AI summary...")
             summary = self.ai_summary.generate_manual_summary(chat_id, recent_messages, hours)
+            print(f"Summary generated: {summary[:100] if summary else 'None'}...")
 
             if summary:
-                if len(summary) > 4000:
-                    for i in range(0, len(summary), 4000):
-                        chunk = summary[i:i+4000]
-                        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
-                else:
-                    await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
+                await self.split_and_send(chat_id, summary, update)
             else:
                 await update.message.reply_text("❌ 生成总结失败")
 
