@@ -49,6 +49,15 @@ class TelegramBot:
                 self.logger.error(f"Failed to send message: {e2}")
                 return None
 
+    async def delete_message_safely(self, chat_id: int, message_id: int) -> None:
+        """安全删除消息，忽略权限错误"""
+        try:
+            await self.application.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception as e:
+            # 忽略删除失败的情况（如没有权限、消息已删除等）
+            self.logger.debug(f"Failed to delete message {message_id} in chat {chat_id}: {e}")
+            pass
+
     async def split_and_send(self, chat_id, text, update=None):
         """分割长消息并发送"""
         if len(text) > 4000:
@@ -151,7 +160,9 @@ class TelegramBot:
         if not self.is_allowed_chat(chat_id):
             return
 
-        await update.message.reply_text("🔄 正在生成总结，请稍候...")
+        # 发送状态消息并保存消息ID
+        status_message = await update.message.reply_text("🔄 正在生成总结，请稍候...")
+        status_message_id = status_message.message_id
 
         try:
             message_count = config.manual_summary_message_count
@@ -172,6 +183,8 @@ class TelegramBot:
             print(f"Found {len(messages)} total messages")
 
             if not messages:
+                # 删除状态消息并发送无消息提示
+                await self.delete_message_safely(chat_id, status_message_id)
                 await update.message.reply_text("📭 没有找到可以总结的消息")
                 return
 
@@ -180,6 +193,8 @@ class TelegramBot:
             print(f"Found {len(recent_messages)} messages in last {hours} hours")
 
             if not recent_messages:
+                # 删除状态消息并发送无消息提示
+                await self.delete_message_safely(chat_id, status_message_id)
                 await update.message.reply_text(f"📭 最近{hours}小时内没有消息")
                 return
 
@@ -188,12 +203,19 @@ class TelegramBot:
             print(f"Summary generated: {summary[:100] if summary else 'None'}...")
 
             if summary:
+                # 发送总结
                 await self.split_and_send(chat_id, summary, update)
+                # 删除状态消息
+                await self.delete_message_safely(chat_id, status_message_id)
             else:
+                # 删除状态消息并发送失败提示
+                await self.delete_message_safely(chat_id, status_message_id)
                 await update.message.reply_text("❌ 生成总结失败")
 
         except Exception as e:
             self.logger.error(f"Error in summary command: {e}")
+            # 删除状态消息并发送错误提示
+            await self.delete_message_safely(chat_id, status_message_id)
             await update.message.reply_text(f"❌ 生成总结时出错: {str(e)}")
 
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
