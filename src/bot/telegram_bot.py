@@ -2,7 +2,6 @@ import asyncio
 import logging
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
-import pytz
 
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -127,7 +126,7 @@ class TelegramBot:
 
 注意：
 • 每日总结时间需在配置文件中设置
-• 所有时间都使用北京时间
+• 所有时间都使用计算机默认时间
         """
 
         await update.message.reply_text(welcome_text)
@@ -161,7 +160,7 @@ class TelegramBot:
 
 **注意：**
 • 每日总结时间需在配置文件的 daily_summary_time 字段中设置
-• 所有时间都使用北京时间（UTC+8）
+• 所有时间都使用计算机默认时间
 • 格式示例：\"23:59\" 或 \"08:00\"
         """
 
@@ -274,14 +273,12 @@ class TelegramBot:
 
     async def send_daily_summary(self, chat_id: int) -> None:
         try:
-            # 使用北京时间获取当天的所有消息
-            import pytz
-            beijing_tz = pytz.timezone('Asia/Shanghai')
-            beijing_now = datetime.now(beijing_tz)
-            beijing_today = beijing_now.date()
+            # 使用计算机本地时间获取当天的所有消息
+            local_now = datetime.now()
+            local_today = local_now.date()
 
-            messages = self.storage.load_messages(chat_id, beijing_today)
-            self.logger.info(f"Loaded {len(messages)} messages for chat {chat_id} on {beijing_today}")
+            messages = self.storage.load_messages(chat_id, local_today)
+            self.logger.info(f"Loaded {len(messages)} messages for chat {chat_id} on {local_today}")
 
             if not messages:
                 return
@@ -312,7 +309,7 @@ class TelegramBot:
 
             # 合并所有时段的总结
             if period_summaries:
-                date_str = beijing_today.strftime("%Y-%m-%d")
+                date_str = local_today.strftime("%Y-%m-%d")
                 header = f"📊 **群组每日总结** ({date_str})\n"
                 header += f"📝 消息总数: {total_messages} 条\n\n"
 
@@ -332,10 +329,7 @@ class TelegramBot:
 
     def _filter_messages_by_time_range(self, messages: List[Dict[str, Any]], start_time: str, end_time: str) -> List[Dict[str, Any]]:
         """根据时间范围过滤消息"""
-        import pytz
         from datetime import datetime, time
-
-        beijing_tz = pytz.timezone('Asia/Shanghai')
 
         # 解析时间
         start_hour, start_minute = map(int, start_time.split(':'))
@@ -348,21 +342,20 @@ class TelegramBot:
 
         for msg in messages:
             try:
-                # 解析消息时间为北京时间
+                # 解析消息时间
                 msg_time_str = msg.get('timestamp', '')
                 if msg_time_str:
                     try:
                         # 解析消息时间戳，保持时区信息或添加UTC时区
                         if 'Z' in msg_time_str or '+' in msg_time_str:
-                            # 如果有时区信息，直接解析
+                            # 如果有时区信息，直接解析并转换为本地时间
                             utc_time = datetime.fromisoformat(msg_time_str.replace('Z', '+00:00'))
+                            local_time = utc_time.astimezone().replace(tzinfo=None)
                         else:
-                            # 如果没有时区信息，假设为UTC
-                            naive_time = datetime.fromisoformat(msg_time_str)
-                            utc_time = pytz.UTC.localize(naive_time)
+                            # 如果没有时区信息，假设为本地时间
+                            local_time = datetime.fromisoformat(msg_time_str)
 
-                        beijing_time = utc_time.astimezone(beijing_tz)
-                        msg_time_only = beijing_time.time()
+                        msg_time_only = local_time.time()
 
                         # 检查消息是否在时间范围内
                         if start_time <= end_time:

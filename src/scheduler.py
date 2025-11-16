@@ -3,7 +3,6 @@ import threading
 from datetime import time, datetime, date, timedelta
 from typing import Optional, Callable
 import logging
-import pytz
 
 from src.config import config
 from src.storage import MessageStorage
@@ -16,7 +15,6 @@ class DailySummaryScheduler:
         self.running = False
         self.scheduler_thread = None
         self.target_time = self.parse_time(config.daily_summary_time)
-        self.beijing_tz = pytz.timezone('Asia/Shanghai')
         self.logger = logging.getLogger(__name__)
 
     @staticmethod
@@ -27,31 +25,25 @@ class DailySummaryScheduler:
         except (ValueError, AttributeError):
             return time(23, 59)
 
-    def get_beijing_time(self) -> datetime:
-        """获取北京时间"""
-        utc_now = datetime.now(pytz.UTC)
-        beijing_now = utc_now.astimezone(self.beijing_tz)
-        return beijing_now
-
     def seconds_until_target_time(self) -> int:
-        """计算距离下次北京时间的目标时间还有多少秒"""
-        beijing_now = self.get_beijing_time()
-        beijing_date = beijing_now.date()
+        """计算距离下次本地时间的目标时间还有多少秒"""
+        local_now = datetime.now()
+        local_date = local_now.date()
 
-        # 创建北京时间的目标时间
-        target_dt = self.beijing_tz.localize(datetime.combine(beijing_date, self.target_time))
+        # 创建本地时间的目标时间
+        target_dt = datetime.combine(local_date, self.target_time)
 
         # 如果目标时间已经过了，设置为明天
-        if beijing_now >= target_dt:
+        if local_now >= target_dt:
             target_dt = target_dt + timedelta(days=1)
 
-        delta = target_dt - beijing_now
+        delta = target_dt - local_now
         return int(delta.total_seconds())
 
     async def send_daily_summaries(self):
         try:
-            beijing_now = self.get_beijing_time()
-            self.logger.info(f"Starting daily summaries at Beijing time: {beijing_now.strftime('%Y-%m-%d %H:%M:%S')}")
+            local_now = datetime.now()
+            self.logger.info(f"Starting daily summaries at local time: {local_now.strftime('%Y-%m-%d %H:%M:%S')}")
 
             chat_ids = self.storage.get_chat_list()
             self.logger.info(f"Found {len(chat_ids)} chats to process")
@@ -68,13 +60,13 @@ class DailySummaryScheduler:
             self.logger.error(f"Error sending daily summaries: {e}")
 
     def scheduler_loop(self):
-        self.logger.info("Scheduler loop started (Beijing Time)")
+        self.logger.info("Scheduler loop started (Local Time)")
         while self.running:
             try:
                 seconds_to_wait = self.seconds_until_target_time()
-                target_datetime = self.get_beijing_time() + timedelta(seconds=seconds_to_wait)
+                target_datetime = datetime.now() + timedelta(seconds=seconds_to_wait)
 
-                self.logger.info(f"Next summary scheduled for Beijing time: {target_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+                self.logger.info(f"Next summary scheduled for local time: {target_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
                 self.logger.info(f"Waiting {seconds_to_wait} seconds...")
 
                 # 如果等待时间小于60秒，直接等待到目标时间
@@ -86,8 +78,8 @@ class DailySummaryScheduler:
                         break
 
                     # 执行总结任务
-                    beijing_now = self.get_beijing_time()
-                    self.logger.info(f"Executing daily summary task at Beijing time: {beijing_now.strftime('%Y-%m-%d %H:%M:%S')}")
+                    local_now = datetime.now()
+                    self.logger.info(f"Executing daily summary task at local time: {local_now.strftime('%Y-%m-%d %H:%M:%S')}")
                     try:
                         # 在新的事件循环中运行
                         loop = asyncio.new_event_loop()
@@ -123,9 +115,9 @@ class DailySummaryScheduler:
         self.running = True
         self.scheduler_thread = threading.Thread(target=self.scheduler_loop, daemon=True)
         self.scheduler_thread.start()
-        beijing_time = self.get_beijing_time()
-        self.logger.info(f"Daily summary scheduler started for {config.daily_summary_time} (Beijing Time)")
-        self.logger.info(f"Current Beijing time: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        local_now = datetime.now()
+        self.logger.info(f"Daily summary scheduler started for {config.daily_summary_time} (Local Time)")
+        self.logger.info(f"Current local time: {local_now.strftime('%Y-%m-%d %H:%M:%S')}")
 
     def stop(self):
         self.logger.info("Stopping scheduler...")
