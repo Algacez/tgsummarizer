@@ -115,13 +115,18 @@ class TelegramBot:
 可用命令：
 /summary - 生成最近消息总结
 /stats - 查看今日统计
+/set_daily [时间] - 设置每日总结时间（北京时间）
 /help - 显示帮助信息
 
 机器人的功能：
 • 自动保存群组消息
-• 每日自动生成总结
+• 每日自动生成总结（北京时间定时触发）
 • 支持手动总结最近消息
 • 可配置AI API地址和模型
+• 手动总结不显示时间标题
+
+时间设置示例：
+/set_daily 23:59 - 设置每天23:59（北京时间）发送总结
         """
 
         await update.message.reply_text(welcome_text)
@@ -136,7 +141,9 @@ class TelegramBot:
 /start - 启动机器人
 /summary - 总结最近消息（默认100条，24小时内）
 /summary [数量] - 总结指定数量的最近消息
+/summary [数量] [小时] - 总结指定数量和时间范围内的消息
 /stats - 显示今日群组统计信息
+/set_daily [时间] - 设置每日总结时间（北京时间）
 /help - 显示此帮助信息
 
 **配置说明：**
@@ -147,9 +154,16 @@ class TelegramBot:
 
 **功能特性：**
 • 每个群组消息独立存储
-• 每日自动生成总结
+• 每日自动生成总结（北京时间定时触发）
 • 支持自定义API地址
 • 消息按日期分文件存储
+• 手动总结不显示时间标题
+
+**时间设置：**
+• 所有时间都使用北京时间（UTC+8）
+• 格式：/set_daily HH:MM
+• 示例：/set_daily 23:59
+• 示例：/set_daily 08:00
         """
 
         await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
@@ -247,6 +261,43 @@ class TelegramBot:
             self.logger.error(f"Error in stats command: {e}")
             await update.message.reply_text(f"❌ 获取统计信息时出错: {str(e)}")
 
+    async def set_daily_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = update.effective_chat.id
+
+        if not self.is_allowed_chat(chat_id):
+            return
+
+        try:
+            if not context.args:
+                await update.message.reply_text("⚙️ 请提供时间参数\n\n用法：/set_daily [时间]\n示例：/set_daily 23:59\n\n所有时间都使用北京时间（UTC+8）")
+                return
+
+            time_str = context.args[0]
+            # 验证时间格式
+            try:
+                hour, minute = map(int, time_str.split(':'))
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError
+            except (ValueError, IndexError):
+                await update.message.reply_text("❌ 时间格式错误，请使用 HH:MM 格式\n示例：/set_daily 23:59")
+                return
+
+            # 更新配置
+            if hasattr(config, 'daily_summary_time'):
+                config.daily_summary_time = time_str
+            else:
+                config['summary']['daily_summary_time'] = time_str
+
+            # 更新调度器
+            if self.scheduler:
+                self.scheduler.update_time(time_str)
+
+            await update.message.reply_text(f"✅ 每日总结时间已设置为 {time_str}（北京时间）\n\n⏰ 机器人将在每天 {time_str}（北京时间）自动发送当日总结")
+
+        except Exception as e:
+            self.logger.error(f"Error in set_daily command: {e}")
+            await update.message.reply_text(f"❌ 设置失败: {str(e)}")
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message_info = self.extract_message_info(update)
 
@@ -284,6 +335,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("summary", self.summary_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
+        self.application.add_handler(CommandHandler("set_daily", self.set_daily_command))
 
         self.application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
