@@ -77,26 +77,15 @@ class DailySummaryScheduler:
                 self.logger.info(f"Next summary scheduled for Beijing time: {target_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
                 self.logger.info(f"Waiting {seconds_to_wait} seconds...")
 
-                # 等待直到目标时间前1分钟
-                wait_time = max(0, seconds_to_wait - 60)
+                # 如果等待时间小于60秒，直接等待到目标时间
+                if seconds_to_wait <= 60:
+                    if seconds_to_wait > 0:
+                        threading.Event().wait(seconds_to_wait)
 
-                if wait_time > 0:
-                    # 分段等待，每60秒检查一次是否仍在运行
-                    while wait_time > 0 and self.running:
-                        chunk = min(60, wait_time)
-                        threading.Event().wait(chunk)
-                        wait_time -= chunk
+                    if not self.running:
+                        break
 
-                if not self.running:
-                    break
-
-                # 等待到精确时间
-                remaining_seconds = self.seconds_until_target_time()
-                if remaining_seconds <= 60 and remaining_seconds > 0:
-                    threading.Event().wait(remaining_seconds)
-
-                # 执行总结任务
-                if self.running:
+                    # 执行总结任务
                     beijing_now = self.get_beijing_time()
                     self.logger.info(f"Executing daily summary task at Beijing time: {beijing_now.strftime('%Y-%m-%d %H:%M:%S')}")
                     try:
@@ -107,6 +96,18 @@ class DailySummaryScheduler:
                         loop.close()
                     except Exception as e:
                         self.logger.error(f"Error in summary task execution: {e}")
+
+                    # 执行完成后等待至少1分钟，避免立即重复执行
+                    threading.Event().wait(60)
+                else:
+                    # 等待到目标时间前1分钟
+                    wait_time = seconds_to_wait - 60
+
+                    # 分段等待，每60秒检查一次是否仍在运行
+                    while wait_time > 0 and self.running:
+                        chunk = min(60, wait_time)
+                        threading.Event().wait(chunk)
+                        wait_time -= chunk
 
             except Exception as e:
                 self.logger.error(f"Scheduler error: {e}")
@@ -132,13 +133,6 @@ class DailySummaryScheduler:
         if self.scheduler_thread and self.scheduler_thread.is_alive():
             self.scheduler_thread.join(timeout=10)
         self.logger.info("Daily summary scheduler stopped")
-
-    def update_time(self, time_str: str):
-        """更新每日总结时间"""
-        self.target_time = self.parse_time(time_str)
-        beijing_time = self.get_beijing_time()
-        self.logger.info(f"Daily summary time updated to {time_str} (Beijing Time)")
-        self.logger.info(f"Current Beijing time: {beijing_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 __all__ = ['DailySummaryScheduler']

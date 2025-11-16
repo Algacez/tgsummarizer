@@ -107,8 +107,14 @@ class MessageStorage:
     def get_chat_list(self) -> List[int]:
         chat_ids = []
         for item in self.data_dir.iterdir():
-            if item.is_dir() and item.name.isdigit():
-                chat_ids.append(int(item.name))
+            if item.is_dir():
+                # 支持负数群组ID（如 -1003128718593）
+                try:
+                    chat_id = int(item.name)
+                    chat_ids.append(chat_id)
+                except ValueError:
+                    # 忽略非数字目录名
+                    continue
         return chat_ids
 
     def get_daily_stats(self, chat_id: int, target_date: date) -> Dict[str, Any]:
