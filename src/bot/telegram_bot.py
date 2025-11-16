@@ -39,8 +39,8 @@ class TelegramBot:
         except Exception as e:
             self.logger.warning(f"Markdown parse error, sending as plain text: {e}")
             try:
-                # 如果Markdown失败，发送纯文本
-                clean_text = self.clean_markdown(text)
+                # 如果Markdown失败，移除特殊字符后发送纯文本
+                clean_text = self.simple_markdown_clean(text)
                 if update:
                     return await update.message.reply_text(clean_text)
                 else:
@@ -48,6 +48,17 @@ class TelegramBot:
             except Exception as e2:
                 self.logger.error(f"Failed to send message: {e2}")
                 return None
+
+    def simple_markdown_clean(self, text):
+        """简单的Markdown清理，移除特殊标记但保留可读性"""
+        # 将 **粗体** 替换为普通文本
+        import re
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+        # 将 *斜体* 替换为普通文本
+        text = re.sub(r'\*(.*?)\*', r'\1', text)
+        # 移除 `代码` 标记
+        text = re.sub(r'`(.*?)`', r'\1', text)
+        return text
 
     async def delete_message_safely(self, chat_id: int, message_id: int) -> None:
         """安全删除消息，忽略权限错误"""
@@ -68,20 +79,6 @@ class TelegramBot:
                     await asyncio.sleep(1)  # 避免发送太快
         else:
             await self.safe_send_message(chat_id, text, update)
-
-    def clean_markdown(self, text):
-        """清理可能有问题的Markdown字符"""
-        # 转义特殊字符
-        special_chars = ['*', '_', '`', '[', ']', '(', ')', '~', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-        cleaned = text
-
-        # 简单的转义处理
-        for char in special_chars:
-            if char in ['*', '_', '`']:
-                # 对于可能导致配对问题的字符，进行转义
-                cleaned = cleaned.replace(char, f'\\{char}')
-
-        return cleaned
 
     def is_allowed_chat(self, chat_id: int) -> bool:
         return not self.allowed_chats or chat_id in self.allowed_chats
@@ -315,11 +312,8 @@ class TelegramBot:
 
                 combined_summary = header + "\n\n".join(period_summaries)
 
-                await self.application.bot.send_message(
-                    chat_id=chat_id,
-                    text=combined_summary,
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                # 使用安全发送方法，自动处理Markdown错误
+                await self.safe_send_message(chat_id, combined_summary)
                 self.logger.info(f"Daily summary sent to chat {chat_id}")
             else:
                 self.logger.info(f"No meaningful conversations found for chat {chat_id}")
