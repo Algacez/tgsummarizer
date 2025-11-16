@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, date
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -273,23 +273,104 @@ class TelegramBot:
 
     async def send_daily_summary(self, chat_id: int) -> None:
         try:
-            messages = self.storage.load_messages(chat_id, date.today())
+            # 使用北京时间获取当天的所有消息
+            import pytz
+            beijing_tz = pytz.timezone('Asia/Shanghai')
+            beijing_now = datetime.now(beijing_tz)
+            beijing_today = beijing_now.date()
+
+            messages = self.storage.load_messages(chat_id, beijing_today)
+            self.logger.info(f"Loaded {len(messages)} messages for chat {chat_id} on {beijing_today}")
 
             if not messages:
                 return
 
-            summary = self.ai_summary.generate_daily_summary(chat_id, messages)
+            # 按时间段分批总结（分为4个时段：早上、下午、晚上、深夜）
+            time_periods = [
+                {"name": "早晨", "start": "06:00", "end": "12:00"},
+                {"name": "下午", "start": "12:00", "end": "18:00"},
+                {"name": "晚上", "start": "18:00", "end": "23:59"},
+                {"name": "深夜", "start": "00:00", "end": "06:00"}
+            ]
 
-            if summary:
+            period_summaries = []
+            total_messages = 0
+
+            for period in time_periods:
+                period_messages = self._filter_messages_by_time_range(messages, period["start"], period["end"])
+                if period_messages:
+                    # 限制每个时段最多100条消息，避免token超限
+                    if len(period_messages) > 100:
+                        period_messages = period_messages[-100:]  # 取最新的100条
+
+                    summary = self.ai_summary.generate_period_summary(period_messages, period['name'])
+                    if summary and not summary.startswith("错误") and not summary.startswith("没有消息"):
+                        period_summary = f"**{period['name']} ({period['start']}-{period['end']})**\n{summary}"
+                        period_summaries.append(period_summary)
+                        total_messages += len(period_messages)
+
+            # 合并所有时段的总结
+            if period_summaries:
+                date_str = beijing_today.strftime("%Y-%m-%d")
+                header = f"📊 **群组每日总结** ({date_str})\n"
+                header += f"📝 消息总数: {total_messages} 条\n\n"
+
+                combined_summary = header + "\n\n".join(period_summaries)
+
                 await self.application.bot.send_message(
                     chat_id=chat_id,
-                    text=summary,
+                    text=combined_summary,
                     parse_mode=ParseMode.MARKDOWN
                 )
                 self.logger.info(f"Daily summary sent to chat {chat_id}")
+            else:
+                self.logger.info(f"No meaningful conversations found for chat {chat_id}")
 
         except Exception as e:
             self.logger.error(f"Error sending daily summary to chat {chat_id}: {e}")
+
+    def _filter_messages_by_time_range(self, messages: List[Dict[str, Any]], start_time: str, end_time: str) -> List[Dict[str, Any]]:
+        """根据时间范围过滤消息"""
+        import pytz
+        from datetime import datetime, time
+
+        beijing_tz = pytz.timezone('Asia/Shanghai')
+
+        # 解析时间
+        start_hour, start_minute = map(int, start_time.split(':'))
+        end_hour, end_minute = map(int, end_time.split(':'))
+
+        start_dt = time(start_hour, start_minute)
+        end_dt = time(end_hour, end_minute)
+
+        filtered_messages = []
+
+        for msg in messages:
+            try:
+                # 解析消息时间为北京时间
+                msg_time_str = msg.get('timestamp', '')
+                if msg_time_str:
+                    # 移除Z并转换为datetime
+                    utc_time = datetime.fromisoformat(msg_time_str.replace('Z', '+00:00'))
+                    beijing_time = utc_time.astimezone(beijing_tz)
+
+                    msg_time_only = beijing_time.time()
+
+                    # 检查消息是否在时间范围内
+                    if start_time <= end_time:
+                        # 正常情况：06:00-12:00 或 18:00-23:59
+                        if start_dt <= msg_time_only <= end_dt:
+                            filtered_messages.append(msg)
+                    else:
+                        # 跨日情况：22:00-06:00 (改为 00:00-06:00)
+                        if msg_time_only >= start_dt or msg_time_only < end_dt:
+                            filtered_messages.append(msg)
+
+            except Exception as e:
+                self.logger.debug(f"Error processing message time: {e}")
+                continue
+
+        return filtered_messages
 
     def setup_handlers(self) -> None:
         self.application.add_handler(CommandHandler("start", self.start_command))

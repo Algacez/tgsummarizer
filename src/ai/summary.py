@@ -156,6 +156,44 @@ class AISummary:
 
         return self._make_api_request(api_messages)
 
+    def generate_period_summary(self, messages: List[Dict[str, Any]], period_name: str) -> Optional[str]:
+        """生成特定时段的总结"""
+        if not messages:
+            return None
+
+        formatted_messages = self.format_messages_for_summary(messages)
+
+        system_prompt = f"""你是一个专业的群聊分析助手。请根据提供的群组聊天记录，生成一份关于{period_name}时段的结构化分话题总结。
+
+重要规则：只输出总结内容，不要添加任何开场白、解释或其他无关文字。不要使用转义字符。
+
+输出格式要求：
+热聊话题
+
+1. [话题标题]
+   - 时间：[具体时间范围，如：14:30-16:45]
+   - 群成员：[参与该话题讨论的主要成员]
+   - 总结：[详细描述该话题的讨论过程、重要观点和结论，合理长度]
+   - 高热发言：[引用或转述该话题中最有代表性的观点或有趣言论]
+
+格式要求：
+- 话题标题要简洁且能概括讨论核心内容
+- 时间范围要准确反映讨论的起止时间
+- 群成员列出该话题的主要参与者，3-5人最佳
+- 总结部分要详细但不冗长
+- 高热发言要生动有趣，体现讨论的热点
+- 按话题重要性和热度排序，最重要的放在前面
+- 话题数量根据实际讨论情况调整，通常3-8个
+
+请直接按格式输出总结内容，不要使用任何转义字符："""
+
+        api_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"以下是{period_name}时段的群组消息记录：\n\n{formatted_messages}"}
+        ]
+
+        return self._make_api_request(api_messages)
+
     def generate_daily_summary(self, chat_id: int, messages: List[Dict[str, Any]]) -> Optional[str]:
         summary = self.generate_summary(messages, "daily")
 

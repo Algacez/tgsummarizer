@@ -3,6 +3,7 @@ import os
 from datetime import datetime, date
 from typing import List, Dict, Any
 from pathlib import Path
+import pytz
 
 from ..config import config
 
@@ -29,9 +30,16 @@ class MessageStorage:
 
     def save_message(self, chat_id: int, message: Dict[str, Any]) -> None:
         file_path = self.get_today_file_path(chat_id)
-        messages = self.load_messages(chat_id, date.today())
 
-        message['timestamp'] = datetime.now().isoformat()
+        # 使用北京时间确定今天的日期
+        beijing_tz = pytz.timezone('Asia/Shanghai')
+        beijing_now = datetime.now(beijing_tz)
+        beijing_today = beijing_now.date()
+
+        messages = self.load_messages(chat_id, beijing_today)
+
+        # 使用北京时间戳
+        message['timestamp'] = beijing_now.isoformat()
         messages.append(message)
 
         try:
