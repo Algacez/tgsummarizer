@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
+import pytz
 
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -350,21 +351,31 @@ class TelegramBot:
                 # 解析消息时间为北京时间
                 msg_time_str = msg.get('timestamp', '')
                 if msg_time_str:
-                    # 移除Z并转换为datetime
-                    utc_time = datetime.fromisoformat(msg_time_str.replace('Z', '+00:00'))
-                    beijing_time = utc_time.astimezone(beijing_tz)
+                    try:
+                        # 解析消息时间戳，保持时区信息或添加UTC时区
+                        if 'Z' in msg_time_str or '+' in msg_time_str:
+                            # 如果有时区信息，直接解析
+                            utc_time = datetime.fromisoformat(msg_time_str.replace('Z', '+00:00'))
+                        else:
+                            # 如果没有时区信息，假设为UTC
+                            naive_time = datetime.fromisoformat(msg_time_str)
+                            utc_time = pytz.UTC.localize(naive_time)
 
-                    msg_time_only = beijing_time.time()
+                        beijing_time = utc_time.astimezone(beijing_tz)
+                        msg_time_only = beijing_time.time()
 
-                    # 检查消息是否在时间范围内
-                    if start_time <= end_time:
-                        # 正常情况：06:00-12:00 或 18:00-23:59
-                        if start_dt <= msg_time_only <= end_dt:
-                            filtered_messages.append(msg)
-                    else:
-                        # 跨日情况：22:00-06:00 (改为 00:00-06:00)
-                        if msg_time_only >= start_dt or msg_time_only < end_dt:
-                            filtered_messages.append(msg)
+                        # 检查消息是否在时间范围内
+                        if start_time <= end_time:
+                            # 正常情况：06:00-12:00 或 18:00-23:59
+                            if start_dt <= msg_time_only <= end_dt:
+                                filtered_messages.append(msg)
+                        else:
+                            # 跨日情况：00:00-06:00
+                            if msg_time_only >= start_dt or msg_time_only < end_dt:
+                                filtered_messages.append(msg)
+                    except Exception as e:
+                        self.logger.debug(f"Error parsing message time {msg_time_str}: {e}")
+                        continue
 
             except Exception as e:
                 self.logger.debug(f"Error processing message time: {e}")
