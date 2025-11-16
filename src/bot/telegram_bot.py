@@ -304,13 +304,30 @@ class TelegramBot:
                         period_summaries.append(period_summary)
                         total_messages += len(period_messages)
 
+            # 生成活跃成员排行
+            user_stats = {}
+            for msg in messages:
+                user = msg.get('user', 'Unknown')
+                user_stats[user] = user_stats.get(user, 0) + 1
+
+            # 排序获取前10名活跃用户
+            top_users = sorted(user_stats.items(), key=lambda x: x[1], reverse=True)[:10]
+
             # 合并所有时段的总结
-            if period_summaries:
+            if period_summaries or top_users:
                 date_str = local_today.strftime("%Y-%m-%d")
                 header = f"📊 **群组每日总结** ({date_str})\n"
-                header += f"📝 消息总数: {total_messages} 条\n\n"
+                header += f"📝 消息总数: {total_messages} 条\n"
+                header += f"👥 活跃用户: {len(user_stats)} 人\n\n"
 
-                combined_summary = header + "\n\n".join(period_summaries)
+                # 添加活跃成员排行
+                if top_users:
+                    header += "🏆 **今日活跃用户排行:**\n"
+                    for i, (user, count) in enumerate(top_users, 1):
+                        header += f"{i}. {user}: {count} 条消息\n"
+                    header += "\n"
+
+                combined_summary = header + "\n\n".join(period_summaries) if period_summaries else header.rstrip()
 
                 # 使用安全发送方法，自动处理Markdown错误
                 await self.safe_send_message(chat_id, combined_summary)
