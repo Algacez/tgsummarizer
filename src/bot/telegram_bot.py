@@ -320,6 +320,10 @@ class TelegramBot:
         if not message_info:
             return
 
+        # Check if we should ignore bot messages
+        if not config.allow_bot_messages and message_info.get('is_bot', False):
+            return
+
         try:
             self.storage.save_message(message_info['chat_id'], message_info)
 
@@ -451,17 +455,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("summary", self.summary_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
 
-        # 处理文本消息，根据配置决定是否包含机器人消息
-        # Debug print
-        print(f"DEBUG: config type: {type(config)}")
-        print(f"DEBUG: config: {config}")
-        if config.allow_bot_messages:
-            # 包含所有消息（包括机器人消息）
-            message_filter = filters.TEXT & ~filters.COMMAND
-        else:
-            # 排除机器人消息
-            message_filter = filters.TEXT & ~filters.COMMAND & ~filters.Bot(filter_empty_username=False)
-
+        # 处理文本消息
+        # 移除 filters.Bot，在 handle_message 中手动过滤
+        message_filter = filters.TEXT & ~filters.COMMAND
         self.application.add_handler(MessageHandler(message_filter, self.handle_message))
 
     async def start(self) -> None:
