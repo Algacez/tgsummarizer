@@ -8,7 +8,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.constants import ParseMode
 
 from ..config import config
-from ..storage import MessageStorage
+from ..storage import MessageStorage, get_local_time_with_offset, get_local_date_with_offset
 from ..ai import AISummary
 from ..scheduler import DailySummaryScheduler
 
@@ -88,7 +88,17 @@ class TelegramBot:
             return None
 
         message = update.message
-        user_name = message.from_user.full_name if message.from_user else "Unknown"
+
+        # 获取发送者信息，支持机器人和普通用户
+        if message.from_user:
+            if message.from_user.is_bot:
+                # 如果是机器人，显示机器人名称并标注
+                user_name = f"{message.from_user.full_name} 🤖"
+            else:
+                user_name = message.from_user.full_name
+        else:
+            user_name = "Unknown"
+
         chat_id = message.chat.id
 
         if not self.is_allowed_chat(chat_id):
@@ -99,11 +109,59 @@ class TelegramBot:
             "text": message.text,
             "chat_id": chat_id,
             "message_id": message.message_id,
-            "type": "text"
+            "type": "text",
+            "is_bot": message.from_user.is_bot if message.from_user else False
         }
 
+    def _should_respond(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """
+        Check if the bot should respond to the command.
+        In private chats: Always respond.
+        In group chats: Respond only if mentioned (e.g., /command@botname).
+        """
+        chat = update.effective_chat
+        if not self.is_allowed_chat(chat.id):
+            return False
+
+        # Private chats always allowed if chat_id is allowed
+        if chat.type == 'private':
+            return True
+
+        message_text = update.message.text
+        if not message_text:
+            return False
+
+        # Debug logging
+        self.logger.info(f"Checking trigger: text='{message_text}'")
+
+        # Check if the mention matches our bot's username
+        bot_username = context.bot.username
+        self.logger.info(f"Bot username: {bot_username}")
+        
+        if bot_username:
+            # Case-insensitive comparison
+            # Check if @botname is present in the message
+            # We check for @botname followed by space or end of string, or just present?
+            # Simplest is just checking if "@botname" substring exists.
+            # But to be safer against partial matches (e.g. @botname2), we might want boundaries.
+            # However, for now, let's just check for the substring as requested.
+            target_mention = f"@{bot_username}".lower()
+            text_lower = message_text.lower()
+            
+            if target_mention in text_lower:
+                self.logger.info("Trigger matched!")
+                return True
+            else:
+                self.logger.info(f"Trigger mismatch: {target_mention} not found in message")
+        else:
+            self.logger.warning("Bot username not available in context!")
+        
+        # No mention in group -> ignore
+        self.logger.info("No mention in group command, ignoring.")
+        return False
+
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self.is_allowed_chat(update.effective_chat.id):
+        if not self._should_respond(update, context):
             return
 
         welcome_text = """
@@ -129,7 +187,7 @@ class TelegramBot:
         await update.message.reply_text(welcome_text)
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not self.is_allowed_chat(update.effective_chat.id):
+        if not self._should_respond(update, context):
             return
 
         help_text = """
@@ -164,10 +222,10 @@ class TelegramBot:
         await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
 
     async def summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        chat_id = update.effective_chat.id
-
-        if not self.is_allowed_chat(chat_id):
+        if not self._should_respond(update, context):
             return
+
+        chat_id = update.effective_chat.id
 
         # 发送状态消息并保存消息ID
         status_message = await update.message.reply_text("🔄 正在生成总结，请稍候...")
@@ -198,7 +256,7 @@ class TelegramBot:
                 return
 
             recent_messages = [msg for msg in messages
-                             if (datetime.now() - datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))).total_seconds() <= hours * 3600]
+                             if (get_local_time_with_offset() - datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))).total_seconds() <= hours * 3600]
             print(f"Found {len(recent_messages)} messages in last {hours} hours")
 
             if not recent_messages:
@@ -228,17 +286,17 @@ class TelegramBot:
             await update.message.reply_text(f"❌ 生成总结时出错: {str(e)}")
 
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        chat_id = update.effective_chat.id
-
-        if not self.is_allowed_chat(chat_id):
+        if not self._should_respond(update, context):
             return
 
+        chat_id = update.effective_chat.id
+
         try:
-            stats = self.storage.get_daily_stats(chat_id, date.today())
+            stats = self.storage.get_daily_stats(chat_id, get_local_date_with_offset())
             recent_count = self.storage.get_message_count(chat_id, 24)
 
             stats_text = f"""
-📊 **今日群组统计** ({date.today().strftime('%Y-%m-%d')})
+📊 **今日群组统计** ({get_local_date_with_offset().strftime('%Y-%m-%d')})
 
 💬 消息总数: {stats['message_count']} 条
 👥 活跃用户: {stats['user_count']} 人
@@ -270,8 +328,8 @@ class TelegramBot:
 
     async def send_daily_summary(self, chat_id: int) -> None:
         try:
-            # 使用计算机本地时间获取当天的所有消息
-            local_now = datetime.now()
+            # 使用考虑偏移量的本地时间获取当天的所有消息
+            local_now = get_local_time_with_offset()
             local_today = local_now.date()
 
             messages = self.storage.load_messages(chat_id, local_today)
@@ -393,9 +451,18 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("summary", self.summary_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
 
-        self.application.add_handler(
-            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
-        )
+        # 处理文本消息，根据配置决定是否包含机器人消息
+        # Debug print
+        print(f"DEBUG: config type: {type(config)}")
+        print(f"DEBUG: config: {config}")
+        if config.allow_bot_messages:
+            # 包含所有消息（包括机器人消息）
+            message_filter = filters.TEXT & ~filters.COMMAND
+        else:
+            # 排除机器人消息
+            message_filter = filters.TEXT & ~filters.COMMAND & ~filters.Bot(filter_empty_username=False)
+
+        self.application.add_handler(MessageHandler(message_filter, self.handle_message))
 
     async def start(self) -> None:
         if not self.bot_token:
@@ -403,7 +470,9 @@ class TelegramBot:
             return
 
         try:
-            self.application = Application.builder().token(self.bot_token).build()
+            # 创建Application
+            builder = Application.builder().token(self.bot_token)
+            self.application = builder.build()
 
             self.setup_handlers()
 

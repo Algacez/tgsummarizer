@@ -33,7 +33,8 @@ class Config:
         return {
             "telegram": {
                 "bot_token": "",
-                "allowed_chats": []
+                "allowed_chats": [],
+                "allow_bot_messages": False
             },
             "ai": {
                 "api_base": "https://api.openai.com/v1",
@@ -50,7 +51,8 @@ class Config:
                 "daily_summary_enabled": True,
                 "daily_summary_time": "23:59",
                 "manual_summary_message_count": 100,
-                "manual_summary_hours": 24
+                "manual_summary_hours": 24,
+                "timezone_offset_hours": 0
             },
             "logging": {
                 "level": "INFO",
@@ -87,6 +89,10 @@ class Config:
         return self.get("telegram.allowed_chats", [])
 
     @property
+    def allow_bot_messages(self) -> bool:
+        return self.get("telegram.allow_bot_messages", False)
+
+    @property
     def api_base(self) -> str:
         return self.get("ai.api_base", "https://api.openai.com/v1")
 
@@ -117,6 +123,10 @@ class Config:
     @property
     def manual_summary_hours(self) -> int:
         return self.get("summary.manual_summary_hours", 24)
+
+    @property
+    def timezone_offset_hours(self) -> int:
+        return self.get("summary.timezone_offset_hours", 0)
 
 
 config = Config()

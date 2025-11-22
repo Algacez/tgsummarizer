@@ -1,10 +1,43 @@
 import json
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Dict, Any
 from pathlib import Path
 
 from ..config import config
+
+
+def get_local_time_with_offset(utc_datetime: datetime = None) -> datetime:
+    """
+    获取考虑了偏移量的本地时间
+
+    Args:
+        utc_datetime: UTC时间，如果为None则使用当前UTC时间
+
+    Returns:
+        应用偏移量后的本地时间
+    """
+    if utc_datetime is None:
+        utc_datetime = datetime.utcnow()
+
+    # 应用配置的偏移量
+    offset_hours = config.timezone_offset_hours
+    local_time = utc_datetime + timedelta(hours=offset_hours)
+
+    return local_time
+
+
+def get_local_date_with_offset(utc_datetime: datetime = None) -> date:
+    """
+    获取考虑了偏移量的本地日期
+
+    Args:
+        utc_datetime: UTC时间，如果为None则使用当前UTC时间
+
+    Returns:
+        应用偏移量后的本地日期
+    """
+    return get_local_time_with_offset(utc_datetime).date()
 
 
 class MessageStorage:
@@ -18,7 +51,7 @@ class MessageStorage:
         return chat_dir
 
     def get_today_file_path(self, chat_id: int) -> Path:
-        today = date.today().strftime("%Y-%m-%d")
+        today = get_local_date_with_offset().strftime("%Y-%m-%d")
         chat_dir = self.get_chat_dir(chat_id)
         return chat_dir / f"{today}.json"
 
@@ -30,13 +63,13 @@ class MessageStorage:
     def save_message(self, chat_id: int, message: Dict[str, Any]) -> None:
         file_path = self.get_today_file_path(chat_id)
 
-        # 使用计算机本地时间确定今天的日期
-        local_now = datetime.now()
+        # 使用考虑偏移量的本地时间确定今天的日期
+        local_now = get_local_time_with_offset()
         local_today = local_now.date()
 
         messages = self.load_messages(chat_id, local_today)
 
-        # 使用本地时间戳
+        # 使用带偏移量的本地时间戳
         message['timestamp'] = local_now.isoformat()
         messages.append(message)
 
@@ -60,7 +93,7 @@ class MessageStorage:
             return []
 
     def load_recent_messages(self, chat_id: int, hours: int = 24) -> List[Dict[str, Any]]:
-        now = datetime.now()
+        now = get_local_time_with_offset()
         messages = []
 
         for day_offset in range(max(0, hours // 24 + 1)):
@@ -82,7 +115,7 @@ class MessageStorage:
 
     def get_latest_messages(self, chat_id: int, count: int = 100) -> List[Dict[str, Any]]:
         messages = []
-        now = datetime.now()
+        now = get_local_time_with_offset()
 
         for day_offset in range(30):
             target_date = (now.date() - timedelta(days=day_offset))
@@ -97,7 +130,7 @@ class MessageStorage:
 
     def delete_old_messages(self, chat_id: int, days_to_keep: int = 30) -> None:
         chat_dir = self.get_chat_dir(chat_id)
-        cutoff_date = date.today() - timedelta(days=days_to_keep)
+        cutoff_date = get_local_date_with_offset() - timedelta(days=days_to_keep)
 
         for file_path in chat_dir.glob("*.json"):
             try:
