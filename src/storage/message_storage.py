@@ -69,9 +69,14 @@ class MessageStorage:
 
         messages = self.load_messages(chat_id, local_today)
 
-        # 使用带偏移量的本地时间戳
-        message['timestamp'] = local_now.isoformat()
-        messages.append(message)
+        # 构建存储的消息对象，只包含必要字段
+        saved_msg = {
+            "user": message.get("user", "Unknown"),
+            "text": message.get("text", ""),
+            # 使用带偏移量的本地时间戳，精确到秒
+            "timestamp": local_now.replace(microsecond=0).isoformat()
+        }
+        messages.append(saved_msg)
 
         try:
             with open(file_path, 'w', encoding='utf-8') as f:

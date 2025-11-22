@@ -89,13 +89,9 @@ class TelegramBot:
 
         message = update.message
 
-        # 获取发送者信息，支持机器人和普通用户
+        # 获取发送者信息
         if message.from_user:
-            if message.from_user.is_bot:
-                # 如果是机器人，显示机器人名称并标注
-                user_name = f"{message.from_user.full_name} 🤖"
-            else:
-                user_name = message.from_user.full_name
+            user_name = message.from_user.full_name
         else:
             user_name = "Unknown"
 
@@ -107,10 +103,7 @@ class TelegramBot:
         return {
             "user": user_name,
             "text": message.text,
-            "chat_id": chat_id,
-            "message_id": message.message_id,
-            "type": "text",
-            "is_bot": message.from_user.is_bot if message.from_user else False
+            "chat_id": chat_id
         }
 
     def _should_respond(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -320,9 +313,7 @@ class TelegramBot:
         if not message_info:
             return
 
-        # Check if we should ignore bot messages
-        if not config.allow_bot_messages and message_info.get('is_bot', False):
-            return
+
 
         try:
             self.storage.save_message(message_info['chat_id'], message_info)
