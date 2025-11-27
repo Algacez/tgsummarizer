@@ -11,7 +11,7 @@ class AISummary:
         self.api_base = config.api_base.rstrip('/')
         self.api_key = config.api_key
         self.model = config.model
-        self.max_tokens = config.get("ai.max_tokens", 1000)
+        self.max_tokens = config.get("ai.max_tokens", 128000)
         self.temperature = config.get("ai.temperature", 0.7)
 
     def _make_api_request(self, messages: List[Dict[str, str]],
@@ -122,6 +122,7 @@ class AISummary:
 - 高热发言要生动有趣，体现讨论的热点
 - 按话题重要性和热度排序，最重要的放在前面
 - 话题数量根据实际讨论情况调整，通常3-8个
+- 如果消息很多，请优先关注最热门的话题和最重要的讨论
 
 请直接按格式输出总结内容，不要使用任何转义字符："""
         else:
@@ -146,6 +147,7 @@ class AISummary:
 - 高热发言要生动有趣，体现讨论的热点
 - 按话题重要性和热度排序，最重要的放在前面
 - 话题数量根据实际讨论情况调整，通常3-8个
+- 如果消息很多，请优先关注最热门的话题和最重要的讨论
 
 请直接按格式输出总结内容，不要使用任何转义字符："""
 
@@ -185,6 +187,7 @@ class AISummary:
 - 高热发言要生动有趣，体现讨论的热点
 - 按话题重要性和热度排序，最重要的放在前面
 - 话题数量根据实际讨论情况调整，通常3-8个
+- 如果消息很多，请优先关注最热门的话题和最重要的讨论
 
 请直接按格式输出总结内容，不要使用任何转义字符："""
 

@@ -40,7 +40,7 @@ class Config:
                 "api_base": "https://api.openai.com/v1",
                 "api_key": "",
                 "model": "gpt-3.5-turbo",
-                "max_tokens": 1000,
+                "max_tokens": 128000,
                 "temperature": 0.7
             },
             "storage": {

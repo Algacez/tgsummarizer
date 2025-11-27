@@ -353,10 +353,7 @@ class TelegramBot:
                 try:
                     period_messages = self._filter_messages_by_time_range(messages, period["start"], period["end"])
                     if period_messages:
-                        # 限制每个时段最多100条消息，避免token超限
-                        if len(period_messages) > 100:
-                            period_messages = period_messages[-100:]  # 取最新的100条
-
+                        # 不再限制消息数量，让AI处理所有消息以生成更全面的总结
                         summary = self.ai_summary.generate_period_summary(period_messages, period['name'])
                         if summary:
                             if summary.startswith("错误"):
