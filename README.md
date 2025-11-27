@@ -53,7 +53,8 @@ The first run will automatically generate a `config.json` configuration file. Yo
     "daily_summary_enabled": true,
     "daily_summary_time": "23:59",
     "manual_summary_message_count": 100,
-    "manual_summary_hours": 24
+    "manual_summary_hours": 24,
+    "timezone_offset_hours": 0
   }
 }
 ```
@@ -64,12 +65,45 @@ The first run will automatically generate a `config.json` configuration file. Yo
 3. Follow the prompts to set the bot's name and username
 4. Obtain the Token and fill it into the configuration file
 
-### 5. Obtain Group ID
+### 5. Timezone and Schedule Configuration
+
+The bot supports timezone configuration to ensure daily summaries are generated at the correct local time:
+
+- **`daily_summary_time`**: Set the time for daily summary delivery in 24-hour format (HH:MM).
+  Example: `"23:59"` for 11:59 PM, `"08:00"` for 8:00 AM.
+
+- **`timezone_offset_hours`**: Configure the timezone offset in hours for accurate local time calculation.
+  - Positive values for east of UTC (e.g., `8` for UTC+8 - Beijing, Singapore)
+  - Negative values for west of UTC (e.g., `-5` for UTC-5 - Eastern Time)
+  - `0` for UTC time (default)
+
+Example configurations:
+```json
+{
+  "summary": {
+    "daily_summary_time": "23:59",
+    "timezone_offset_hours": 8
+  }
+}
+```
+This configuration will generate daily summaries at 11:59 PM Beijing time (UTC+8).
+
+```json
+{
+  "summary": {
+    "daily_summary_time": "08:00",
+    "timezone_offset_hours": -5
+  }
+}
+```
+This configuration will generate daily summaries at 8:00 AM Eastern Time (UTC-5).
+
+### 6. Obtain Group ID
 1. Add the bot to the group
 2. After sending a message, check the logs or use @userinfobot to get the group ID
 3. Add the group ID to the `allowed_chats` list
 
-### 6. Run the Bot
+### 7. Run the Bot
 ```bash
 python main.py
 ```
@@ -98,9 +132,10 @@ python main.py
 
 ### Summary Configuration
 - `daily_summary_enabled`: Whether to enable daily auto-summary
-- `daily_summary_time`: Time for daily summary delivery
+- `daily_summary_time`: Time for daily summary delivery (format: "HH:MM", e.g., "23:59")
 - `manual_summary_message_count`: Default number of messages for manual summary
 - `manual_summary_hours`: Time range for manual summary
+- `timezone_offset_hours`: Timezone offset in hours for local time calculation (e.g., 8 for UTC+8, -5 for UTC-5)
 
 ### Storage Configuration
 - `data_dir`: Message storage directory
