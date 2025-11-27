@@ -364,6 +364,9 @@ class TelegramBot:
                             error_msg = f"{period['name']}时段总结返回空结果"
                             error_messages.append(error_msg)
                             self.logger.warning(f"Empty summary for chat {chat_id}, period {period['name']}")
+
+                        # 在每个时间段总结请求后添加延迟
+                        await asyncio.sleep(config.daily_summary_period_interval)
                 except Exception as e:
                     error_msg = f"{period['name']}时段处理异常: {str(e)}"
                     error_messages.append(error_msg)

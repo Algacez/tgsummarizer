@@ -128,5 +128,9 @@ class Config:
     def timezone_offset_hours(self) -> int:
         return self.get("summary.timezone_offset_hours", 0)
 
+    @property
+    def daily_summary_period_interval(self) -> int:
+        return self.get("summary.daily_summary_period_interval", 30)
+
 
 config = Config()
