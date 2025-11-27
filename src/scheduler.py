@@ -48,16 +48,40 @@ class DailySummaryScheduler:
             chat_ids = self.storage.get_chat_list()
             self.logger.info(f"Found {len(chat_ids)} chats to process")
 
+            success_count = 0
+            error_count = 0
+
             for chat_id in chat_ids:
                 try:
                     await self.bot_instance.send_daily_summary(chat_id)
                     self.logger.info(f"Daily summary sent to chat {chat_id}")
+                    success_count += 1
                     await asyncio.sleep(2)  # 增加间隔避免触发限制
                 except Exception as e:
-                    self.logger.error(f"Failed to send summary to chat {chat_id}: {e}")
+                    error_msg = f"Failed to send summary to chat {chat_id}: {e}"
+                    self.logger.error(error_msg)
+                    error_count += 1
+                    # 尝试发送错误信息到群组
+                    try:
+                        await self.bot_instance.safe_send_message(chat_id, f"❌ **每日总结任务执行失败**\n\n{error_msg}")
+                    except Exception as send_error:
+                        self.logger.error(f"Failed to send error message to chat {chat_id}: {send_error}")
+
+            self.logger.info(f"Daily summary task completed. Success: {success_count}, Errors: {error_count}")
 
         except Exception as e:
-            self.logger.error(f"Error sending daily summaries: {e}")
+            error_msg = f"Error sending daily summaries: {e}"
+            self.logger.error(error_msg)
+            # 如果是全局错误，尝试通知所有群组
+            try:
+                chat_ids = self.storage.get_chat_list()
+                for chat_id in chat_ids:
+                    try:
+                        await self.bot_instance.safe_send_message(chat_id, f"❌ **每日总结任务全局错误**\n\n{error_msg}")
+                    except Exception as send_error:
+                        self.logger.error(f"Failed to send global error message to chat {chat_id}: {send_error}")
+            except Exception as global_error:
+                self.logger.error(f"Failed to send global error notifications: {global_error}")
 
     def scheduler_loop(self):
         self.logger.info("Scheduler loop started (Local Time)")

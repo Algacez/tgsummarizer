@@ -159,11 +159,12 @@ class AISummary:
     def generate_period_summary(self, messages: List[Dict[str, Any]], period_name: str) -> Optional[str]:
         """生成特定时段的总结"""
         if not messages:
-            return None
+            return "没有消息可以总结"
 
-        formatted_messages = self.format_messages_for_summary(messages)
+        try:
+            formatted_messages = self.format_messages_for_summary(messages)
 
-        system_prompt = f"""你是一个专业的群聊分析助手。请根据提供的群组聊天记录，生成一份关于{period_name}时段的结构化分话题总结。
+            system_prompt = f"""你是一个专业的群聊分析助手。请根据提供的群组聊天记录，生成一份关于{period_name}时段的结构化分话题总结。
 
 重要规则：只输出总结内容，不要添加任何开场白、解释或其他无关文字。不要使用转义字符。
 
@@ -187,12 +188,14 @@ class AISummary:
 
 请直接按格式输出总结内容，不要使用任何转义字符："""
 
-        api_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"以下是{period_name}时段的群组消息记录：\n\n{formatted_messages}"}
-        ]
+            api_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"以下是{period_name}时段的群组消息记录：\n\n{formatted_messages}"}
+            ]
 
-        return self._make_api_request(api_messages)
+            return self._make_api_request(api_messages)
+        except Exception as e:
+            return f"错误：生成{period_name}时段总结时发生异常 - {str(e)}"
 
     def generate_daily_summary(self, chat_id: int, messages: List[Dict[str, Any]]) -> Optional[str]:
         summary = self.generate_summary(messages, "daily")

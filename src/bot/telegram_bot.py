@@ -331,6 +331,10 @@ class TelegramBot:
             self.logger.info(f"Loaded {len(messages)} messages for chat {chat_id} on {local_today}")
 
             if not messages:
+                # 发送无消息提示
+                date_str = local_today.strftime("%Y-%m-%d")
+                no_msg_summary = f"📊 **群组每日总结** ({date_str})\n\n📭 今日没有消息记录"
+                await self.safe_send_message(chat_id, no_msg_summary)
                 return
 
             # 按时间段分批总结（分为4个时段：早上、下午、晚上、深夜）
@@ -343,19 +347,36 @@ class TelegramBot:
 
             period_summaries = []
             total_messages = 0
+            error_messages = []
 
             for period in time_periods:
-                period_messages = self._filter_messages_by_time_range(messages, period["start"], period["end"])
-                if period_messages:
-                    # 限制每个时段最多100条消息，避免token超限
-                    if len(period_messages) > 100:
-                        period_messages = period_messages[-100:]  # 取最新的100条
+                try:
+                    period_messages = self._filter_messages_by_time_range(messages, period["start"], period["end"])
+                    if period_messages:
+                        # 限制每个时段最多100条消息，避免token超限
+                        if len(period_messages) > 100:
+                            period_messages = period_messages[-100:]  # 取最新的100条
 
-                    summary = self.ai_summary.generate_period_summary(period_messages, period['name'])
-                    if summary and not summary.startswith("错误") and not summary.startswith("没有消息"):
-                        period_summary = f"**{period['name']} ({period['start']}-{period['end']})**\n{summary}"
-                        period_summaries.append(period_summary)
-                        total_messages += len(period_messages)
+                        summary = self.ai_summary.generate_period_summary(period_messages, period['name'])
+                        if summary:
+                            if summary.startswith("错误"):
+                                # 记录错误但继续处理其他时段
+                                error_msg = f"{period['name']}时段总结错误: {summary}"
+                                error_messages.append(error_msg)
+                                self.logger.error(f"Summary error for chat {chat_id}, period {period['name']}: {summary}")
+                            elif not summary.startswith("没有消息"):
+                                period_summary = f"**{period['name']} ({period['start']}-{period['end']})**\n{summary}"
+                                period_summaries.append(period_summary)
+                                total_messages += len(period_messages)
+                        else:
+                            error_msg = f"{period['name']}时段总结返回空结果"
+                            error_messages.append(error_msg)
+                            self.logger.warning(f"Empty summary for chat {chat_id}, period {period['name']}")
+                except Exception as e:
+                    error_msg = f"{period['name']}时段处理异常: {str(e)}"
+                    error_messages.append(error_msg)
+                    self.logger.error(f"Error processing period {period['name']} for chat {chat_id}: {e}")
+                    continue
 
             # 生成活跃成员排行
             user_stats = {}
@@ -367,29 +388,40 @@ class TelegramBot:
             top_users = sorted(user_stats.items(), key=lambda x: x[1], reverse=True)[:10]
 
             # 合并所有时段的总结
-            if period_summaries or top_users:
-                date_str = local_today.strftime("%Y-%m-%d")
-                header = f"📊 **群组每日总结** ({date_str})\n"
-                header += f"📝 消息总数: {total_messages} 条\n"
-                header += f"👥 活跃用户: {len(user_stats)} 人\n\n"
+            date_str = local_today.strftime("%Y-%m-%d")
+            header = f"📊 **群组每日总结** ({date_str})\n"
+            header += f"📝 消息总数: {total_messages} 条\n"
+            header += f"👥 活跃用户: {len(user_stats)} 人\n\n"
 
-                # 添加活跃成员排行
-                if top_users:
-                    header += "🏆 **今日活跃用户排行:**\n"
-                    for i, (user, count) in enumerate(top_users, 1):
-                        header += f"{i}. {user}: {count} 条消息\n"
-                    header += "\n"
+            # 添加活跃成员排行
+            if top_users:
+                header += "🏆 **今日活跃用户排行:**\n"
+                for i, (user, count) in enumerate(top_users, 1):
+                    header += f"{i}. {user}: {count} 条消息\n"
+                header += "\n"
 
-                combined_summary = header + "\n\n".join(period_summaries) if period_summaries else header.rstrip()
-
-                # 使用安全发送方法，自动处理Markdown错误
-                await self.safe_send_message(chat_id, combined_summary)
-                self.logger.info(f"Daily summary sent to chat {chat_id}")
+            # 构建最终总结内容
+            if period_summaries:
+                combined_summary = header + "\n\n".join(period_summaries)
             else:
-                self.logger.info(f"No meaningful conversations found for chat {chat_id}")
+                combined_summary = header.rstrip() + "\n\n📭 今日无有效话题讨论"
+
+            # 添加错误信息（如果有）
+            if error_messages:
+                combined_summary += "\n\n⚠️ **处理过程中遇到的问题:**\n" + "\n".join([f"- {err}" for err in error_messages[:5]])  # 限制显示前5个错误
+
+            # 使用安全发送方法，自动处理Markdown错误
+            await self.safe_send_message(chat_id, combined_summary)
+            self.logger.info(f"Daily summary sent to chat {chat_id}")
 
         except Exception as e:
+            error_msg = f"生成每日总结时发生严重错误: {str(e)}"
             self.logger.error(f"Error sending daily summary to chat {chat_id}: {e}")
+            try:
+                # 尝试发送错误信息到群组
+                await self.safe_send_message(chat_id, f"❌ **每日总结生成失败**\n\n{error_msg}")
+            except Exception as send_error:
+                self.logger.error(f"Failed to send error message to chat {chat_id}: {send_error}")
 
     def _filter_messages_by_time_range(self, messages: List[Dict[str, Any]], start_time: str, end_time: str) -> List[Dict[str, Any]]:
         """根据时间范围过滤消息"""

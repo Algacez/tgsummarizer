@@ -141,6 +141,30 @@ The bot supports any OpenAI API-compatible interfaces, including:
 3. **Costs**: Using AI APIs may incur fees; monitor usage
 4. **Permissions**: Ensure the bot has sufficient group permissions
 
+## Testing
+
+### Running Tests
+
+To test the daily summary functionality, run:
+
+```bash
+python run_tests.py
+```
+
+This will execute unit tests for:
+- Message time filtering
+- Period summary generation
+- Error handling scenarios
+- Scheduler functionality
+
+### Test Coverage
+
+The tests cover:
+- Normal summary generation
+- Edge cases (no messages, API errors)
+- Time range filtering (including cross-day periods)
+- Error reporting and handling
+
 ## Troubleshooting
 
 ### Common Issues
