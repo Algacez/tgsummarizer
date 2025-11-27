@@ -110,7 +110,7 @@ class TelegramBot:
         """
         Check if the bot should respond to the command.
         In private chats: Always respond.
-        In group chats: Respond only if mentioned (e.g., /command@botname).
+        In group chats: Respond based on configuration - either always or only when mentioned.
         """
         chat = update.effective_chat
         if not self.is_allowed_chat(chat.id):
@@ -120,38 +120,33 @@ class TelegramBot:
         if chat.type == 'private':
             return True
 
-        message_text = update.message.text
-        if not message_text:
-            return False
+        message_text = update.message.text if update.message and update.message.text else ""
 
-        # Debug logging
-        self.logger.info(f"Checking trigger: text='{message_text}'")
+        # For group chats, check if we should always respond or only when mentioned
+        bot_username = context.bot.username if context.bot else None
 
-        # Check if the mention matches our bot's username
-        bot_username = context.bot.username
-        self.logger.info(f"Bot username: {bot_username}")
-        
-        if bot_username:
-            # Case-insensitive comparison
-            # Check if @botname is present in the message
-            # We check for @botname followed by space or end of string, or just present?
-            # Simplest is just checking if "@botname" substring exists.
-            # But to be safer against partial matches (e.g. @botname2), we might want boundaries.
-            # However, for now, let's just check for the substring as requested.
-            target_mention = f"@{bot_username}".lower()
-            text_lower = message_text.lower()
-            
-            if target_mention in text_lower:
-                self.logger.info("Trigger matched!")
-                return True
-            else:
-                self.logger.info(f"Trigger mismatch: {target_mention} not found in message")
+        # If no username available, respond anyway (fallback)
+        if not bot_username:
+            return True
+
+        # Check if this is a command message
+        if message_text.startswith('/'):
+            # In group chats, we can respond to commands without mention
+            # unless specifically configured otherwise
+            return True
         else:
-            self.logger.warning("Bot username not available in context!")
-        
-        # No mention in group -> ignore
-        self.logger.info("No mention in group command, ignoring.")
-        return False
+            # For non-command messages, check for bot mention
+            if bot_username:
+                target_mention = f"@{bot_username}".lower()
+                text_lower = message_text.lower() if message_text else ""
+
+                if target_mention in text_lower:
+                    return True
+                else:
+                    return False
+            else:
+                # If we can't determine bot username, be conservative
+                return False
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._should_respond(update, context):
