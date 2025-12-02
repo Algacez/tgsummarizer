@@ -109,8 +109,10 @@ class TelegramBot:
     def _should_respond(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         """
         Check if the bot should respond to the command.
-        In private chats: Always respond.
-        In group chats: Respond based on configuration - either always or only when mentioned.
+        In private chats: Always respond (no @ mention needed).
+        In group chats:
+            - For commands (starting with /): Always respond
+            - For regular messages: Only respond when @bot_username is mentioned
         """
         chat = update.effective_chat
         if not self.is_allowed_chat(chat.id):
@@ -122,31 +124,29 @@ class TelegramBot:
 
         message_text = update.message.text if update.message and update.message.text else ""
 
-        # For group chats, check if we should always respond or only when mentioned
+        # For group chats, check if it's a command
+        if message_text.startswith('/'):
+            # Commands always work in group chats (no @ mention required)
+            return True
+
+        # For non-command messages in group chats, require @ mention
         bot_username = context.bot.username if context.bot else None
 
-        # If no username available, respond anyway (fallback)
+        # If we can't get bot username, be conservative and don't respond
         if not bot_username:
-            return True
+            self.logger.warning(f"Cannot determine bot username, not responding in group chat {chat.id}")
+            return False
 
-        # Check if this is a command message
-        if message_text.startswith('/'):
-            # In group chats, we can respond to commands without mention
-            # unless specifically configured otherwise
+        # Check if message contains @bot_username mention
+        target_mention = f"@{bot_username}".lower()
+        text_lower = message_text.lower() if message_text else ""
+
+        if target_mention in text_lower:
+            self.logger.debug(f"Found bot mention in message, responding")
             return True
         else:
-            # For non-command messages, check for bot mention
-            if bot_username:
-                target_mention = f"@{bot_username}".lower()
-                text_lower = message_text.lower() if message_text else ""
-
-                if target_mention in text_lower:
-                    return True
-                else:
-                    return False
-            else:
-                # If we can't determine bot username, be conservative
-                return False
+            self.logger.debug(f"No bot mention found in group chat for non-command message, not responding")
+            return False
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._should_respond(update, context):
@@ -156,7 +156,9 @@ class TelegramBot:
 🤖 Telegram群组总结机器人已启动！
 
 可用命令：
-/summary - 生成最近消息总结
+/summary - 生成最近100条消息总结（默认）
+/summary n 100 - 生成最近100条消息总结
+/summary h 12 - 生成最近12小时内的消息总结
 /dailysummary - 手动触发生成今日总结
 /stats - 查看今日统计
 /schedulerstatus - 查看调度器状态
@@ -170,10 +172,12 @@ class TelegramBot:
 • 可配置AI API地址和模型
 • 详细的任务执行报告
 
-注意：
+⚠️重要使用说明：
+• 在群组中，命令可以直接使用
+• 在群组中，普通消息需要 @机器人用户名 才会触发
+• 在私聊中所有消息都可以直接触发，无需 @ 提及
 • 每日总结时间需在配置文件中设置
 • 所有时间都使用计算机默认时间
-• 新增调度器状态和错误通知功能
         """
 
         await update.message.reply_text(welcome_text)
@@ -186,11 +190,11 @@ class TelegramBot:
 📋 **命令帮助**
 
 /start - 启动机器人
-/summary - 总结最近消息（默认100条，24小时内）
-/summary [数量] - 总结指定数量的最近消息
-/summary [数量] [小时] - 总结指定数量和时间范围内的消息
+/summary - 总结最近100条消息（默认）
+/summary n 100 - 总结最近指定数量的消息
+/summary h 12 - 总结最近指定小时内的消息
 /dailysummary - 手动触发生成今日总结（按时段生成）
-/schedulerstatus - 查看调度器状态（显示下次执行时间、时区偏移、AI模型等信息）
+/schedulerstatus - 查看调度器状态（显示下次执行时间、时区偏移、AI模型等）
 /stats - 显示今日群组统计信息
 /help - 显示此帮助信息
 
@@ -210,12 +214,15 @@ class TelegramBot:
 • 详细的执行报告和错误通知
 • 调度器状态监控（显示时区、AI模型配置）
 
-**注意：**
+**重要说明：**
+• 📌 **在群组中，命令可以直接使用，普通消息需要 @机器人用户名 才会触发**
+• 📌 **在私聊中所有消息都可以直接触发，无需 @ 提及**
 • 每日总结时间需在配置文件的 daily_summary_time 字段中设置
 • 所有时间都使用计算机默认时间
 • 格式示例：\"23:59\" 或 \"08:00\"
 • 每日总结会发送到所有允许的群组
 • 任务执行过程中会发送详细的进度通知
+• /summary 默认总结100条消息，而非按时间筛选
         """
 
         await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
@@ -231,21 +238,38 @@ class TelegramBot:
         status_message_id = status_message.message_id
 
         try:
-            message_count = config.manual_summary_message_count
-            hours = config.manual_summary_hours
+            # 默认配置
+            message_count = 100  # 默认总结100条消息
+            hours = 24  # 默认不超过24小时
 
+            # 解析参数
             if context.args:
                 try:
-                    if len(context.args) == 1:
-                        message_count = int(context.args[0])
-                    elif len(context.args) == 2:
-                        message_count = int(context.args[0])
-                        hours = int(context.args[1])
-                except ValueError:
+                    if len(context.args) == 2:
+                        # 格式: /summary n 100 或 /summary h 12
+                        prefix = context.args[0].lower()
+                        value = int(context.args[1])
+
+                        if prefix == 'n':
+                            # n: 指定消息数量
+                            message_count = value
+                        elif prefix == 'h':
+                            # h: 指定小时数
+                            hours = value
+                        else:
+                            # 如果前缀不认识，尝试解析为小时
+                            hours = int(context.args[0])
+                    elif len(context.args) == 1:
+                        # 单个参数，默认作为小时数
+                        hours = int(context.args[0])
+                except (ValueError, IndexError):
+                    # 如果解析失败，使用默认值
                     pass
 
             print(f"Looking for messages: count={message_count}, hours={hours}")
-            messages = self.storage.get_latest_messages(chat_id, message_count)
+
+            # 先加载消息（使用较大的数量，确保能获取到足够的历史消息）
+            messages = self.storage.get_latest_messages(chat_id, max(message_count * 2, 1000))
             print(f"Found {len(messages)} total messages")
 
             if not messages:
@@ -254,9 +278,15 @@ class TelegramBot:
                 await update.message.reply_text("📭 没有找到可以总结的消息")
                 return
 
+            # 先按时间筛选
             recent_messages = [msg for msg in messages
                              if (get_local_time_with_offset() - datetime.fromisoformat(msg['timestamp'].replace('Z', '+00:00'))).total_seconds() <= hours * 3600]
-            print(f"Found {len(recent_messages)} messages in last {hours} hours")
+
+            # 再按数量限制
+            if len(recent_messages) > message_count:
+                recent_messages = recent_messages[-message_count:]  # 取最新的N条
+
+            print(f"Found {len(recent_messages)} messages (limited to {message_count} within {hours} hours)")
 
             if not recent_messages:
                 # 删除状态消息并发送无消息提示
