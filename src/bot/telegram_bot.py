@@ -525,12 +525,12 @@ class TelegramBot:
 
             result['total_messages'] = len(messages)
 
-            # 按时间段分批总结（分为4个时段：早上、下午、晚上、深夜）
+            # 按时间段分批总结（分为4个时段：深夜、晚上、下午、早晨）
             time_periods = [
+                {"name": "深夜", "start": "00:00", "end": "06:00"},
                 {"name": "早晨", "start": "06:00", "end": "12:00"},
                 {"name": "下午", "start": "12:00", "end": "18:00"},
-                {"name": "晚上", "start": "18:00", "end": "23:59"},
-                {"name": "深夜", "start": "00:00", "end": "06:00"}
+                {"name": "晚上", "start": "18:00", "end": "23:59"}
             ]
 
             period_summaries = []
