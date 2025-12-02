@@ -28,37 +28,104 @@ class TelegramBot:
         )
         self.logger = logging.getLogger(__name__)
 
-    async def safe_send_message(self, chat_id, text, update=None):
+    async def safe_send_message(self, chat_id, text, update=None, parse_mode=None):
         """安全发送消息，自动处理Markdown错误"""
         try:
-            # 首先尝试带Markdown格式
+            # 首先尝试发送（根据参数决定是否使用Markdown）
             if update:
-                return await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-            else:
-                return await self.application.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            self.logger.warning(f"Markdown parse error, sending as plain text: {e}")
-            try:
-                # 如果Markdown失败，移除特殊字符后发送纯文本
-                clean_text = self.simple_markdown_clean(text)
-                if update:
-                    return await update.message.reply_text(clean_text)
+                if parse_mode:
+                    return await update.message.reply_text(text, parse_mode=parse_mode)
                 else:
-                    return await self.application.bot.send_message(chat_id=chat_id, text=clean_text)
-            except Exception as e2:
-                self.logger.error(f"Failed to send message: {e2}")
-                return None
+                    return await update.message.reply_text(text)
+            else:
+                if parse_mode and self.application:
+                    return await self.application.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+                elif self.application:
+                    return await self.application.bot.send_message(chat_id=chat_id, text=text)
+        except Exception as e:
+            self.logger.warning(f"Message send failed with parse_mode={parse_mode}, error: {e}")
 
-    def simple_markdown_clean(self, text):
-        """简单的Markdown清理，移除特殊标记但保留可读性"""
-        # 将 **粗体** 替换为普通文本
+            # 如果是Markdown解析错误，尝试清理后重新发送
+            if parse_mode == 'Markdown' or 'parse' in str(e).lower() or 'entity' in str(e).lower():
+                try:
+                    # 如果Markdown失败，尝试移除不完整的标记
+                    clean_text = self.fix_markdown_errors(text)
+                    if update:
+                        return await update.message.reply_text(clean_text, parse_mode=ParseMode.MARKDOWN)
+                    else:
+                        return await self.application.bot.send_message(chat_id=chat_id, text=clean_text, parse_mode=ParseMode.MARKDOWN)
+                except Exception as e2:
+                    self.logger.warning(f"Markdown still failed after cleanup, sending as plain text: {e2}")
+                    try:
+                        # 最后尝试作为纯文本发送
+                        plain_text = self.remove_all_markdown(text)
+                        if update:
+                            return await update.message.reply_text(plain_text)
+                        else:
+                            return await self.application.bot.send_message(chat_id=chat_id, text=plain_text)
+                    except Exception as e3:
+                        self.logger.error(f"Failed to send message even as plain text: {e3}")
+                        return None
+            else:
+                # 如果不是Markdown错误，尝试作为纯文本发送
+                try:
+                    if update:
+                        return await update.message.reply_text(text)
+                    else:
+                        return await self.application.bot.send_message(chat_id=chat_id, text=text)
+                except Exception as e2:
+                    self.logger.error(f"Failed to send message as plain text: {e2}")
+                    return None
+
+    def fix_markdown_errors(self, text):
+        """修复常见的Markdown错误，如未闭合的标记"""
         import re
-        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
-        # 将 *斜体* 替换为普通文本
-        text = re.sub(r'\*(.*?)\*', r'\1', text)
-        # 移除 `代码` 标记
-        text = re.sub(r'`(.*?)`', r'\1', text)
+
+        # 修复未闭合的粗体 **
+        # 统计 ** 的数量，如果是奇数，在最后添加一个 **
+        bold_count = len(re.findall(r'\*\*', text))
+        if bold_count % 2 != 0:
+            text += ' **'
+
+        # 修复未闭合的斜体 *
+        # 需要排除 ** 中的 *
+        single_stars = re.findall(r'(?<!\*)\*(?!\*)', text)  # 不匹配 ** 中的 *
+        if len(single_stars) % 2 != 0:
+            text += ' *'
+
+        # 修复未闭合的行内代码 `
+        code_count = len(re.findall(r'(?<!`)`(?!`)', text))
+        if code_count % 2 != 0:
+            text += ' `'
+
         return text
+
+    def remove_all_markdown(self, text):
+        """移除所有Markdown标记"""
+        import re
+
+        # 移除链接 [text](url)
+        text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+
+        # 移除所有其他Markdown标记
+        for pattern, replacement in [
+            (r'\*\*(.*?)\*\*', r'\1'),  # 粗体
+            (r'\*(.*?)\*', r'\1'),      # 斜体
+            (r'`(.*?)`', r'\1'),        # 行内代码
+            (r'```[\s\S]*?```', ''),    # 代码块
+            (r'~~(.*?)~~', r'\1'),      # 删除线
+            (r'__(.*?)__', r'\1'),      # 下划线
+            (r'~~(.*?)~~', r'\1'),      # 删除线
+        ]:
+            text = re.sub(pattern, replacement, text, flags=re.MULTILINE)
+
+        # 移除标题标记 (# Header)
+        text = re.sub(r'^#+\s*(.*)$', r'\1', text, flags=re.MULTILINE)
+
+        # 移除列表标记 (* item 或 - item)
+        text = re.sub(r'^\s*[*-]\s+(.*)$', r'\1', text, flags=re.MULTILINE)
+
+        return text.strip()
 
     async def delete_message_safely(self, chat_id: int, message_id: int) -> None:
         """安全删除消息，忽略权限错误"""
@@ -451,7 +518,7 @@ class TelegramBot:
                 # 发送无消息提示
                 date_str = local_today.strftime("%Y-%m-%d")
                 no_msg_summary = f"📊 **群组每日总结** ({date_str})\n\n📭 今日没有消息记录"
-                await self.safe_send_message(chat_id, no_msg_summary)
+                await self.safe_send_message(chat_id, no_msg_summary, parse_mode=ParseMode.MARKDOWN)
                 result['status'] = 'no_messages'
                 result['summary_sent'] = True
                 return result
@@ -470,6 +537,11 @@ class TelegramBot:
             total_messages_processed = 0
             error_messages = []
 
+            # 发送标题
+            date_str = local_today.strftime("%Y-%m-%d")
+            header = f"📊 **群组每日总结** ({date_str})"
+            await self.safe_send_message(chat_id, header, parse_mode=ParseMode.MARKDOWN)
+
             for i, period in enumerate(time_periods, 1):
                 try:
                     period_messages = self._filter_messages_by_time_range(messages, period["start"], period["end"])
@@ -486,10 +558,12 @@ class TelegramBot:
                                 result['errors'].append(error_msg)
                                 self.logger.error(f"Summary error for chat {chat_id}, period {period['name']}: {summary}")
                             elif not summary.startswith("没有消息"):
+                                # 构建时段标题和总结
                                 period_summary = f"**{period['name']} ({period['start']}-{period['end']})**\n{summary}"
-                                period_summaries.append(period_summary)
-                                total_messages_processed += len(period_messages)
+                                # 使用分割发送方法，确保每条消息 < 1000 字符
+                                await self.safe_send_and_split(chat_id, period_summary)
                                 result['periods_processed'] += 1
+                                total_messages_processed += len(period_messages)
                         else:
                             error_msg = f"{period['name']}时段总结返回空结果"
                             error_messages.append(error_msg)
@@ -517,33 +591,30 @@ class TelegramBot:
             # 排序获取前10名活跃用户
             top_users = sorted(user_stats.items(), key=lambda x: x[1], reverse=True)[:10]
 
-            # 合并所有时段的总结
-            date_str = local_today.strftime("%Y-%m-%d")
-            header = f"📊 **群组每日总结** ({date_str})\n"
-            header += f"📝 消息总数: {total_messages_processed} 条\n"
-            header += f"👥 活跃用户: {len(user_stats)} 人\n\n"
+            # 构建统计信息
+            stats_text = f"📝 消息总数: {total_messages_processed} 条\n"
+            stats_text += f"👥 活跃用户: {len(user_stats)} 人\n\n"
 
             # 添加活跃成员排行
             if top_users:
-                header += "🏆 **今日活跃用户排行:**\n"
+                stats_text += "🏆 **今日活跃用户排行:**\n"
                 for i, (user, count) in enumerate(top_users, 1):
-                    header += f"{i}. {user}: {count} 条消息\n"
-                header += "\n"
+                    stats_text += f"{i}. {user}: {count} 条消息\n"
+                stats_text += "\n"
 
-            # 构建最终总结内容
-            if period_summaries:
-                combined_summary = header + "\n\n".join(period_summaries)
+            # 如果有错误，添加错误信息（限制显示前5个错误）
+            if error_messages:
+                stats_text += "⚠️ **处理过程中遇到的问题:**\n"
+                stats_text += "\n".join([f"- {err}" for err in error_messages[:5]])
+
+            # 使用安全发送方法发送统计信息
+            if total_messages_processed > 0:
                 result['status'] = 'success' if not error_messages else 'partial'
             else:
-                combined_summary = header.rstrip() + "\n\n📭 今日无有效话题讨论"
-                result['status'] = 'success' if not error_messages else 'partial'
+                stats_text = "📭 今日无有效话题讨论"
+                result['status'] = 'no_messages'
 
-            # 添加错误信息（如果有）
-            if error_messages:
-                combined_summary += "\n\n⚠️ **处理过程中遇到的问题:**\n" + "\n".join([f"- {err}" for err in error_messages[:5]])  # 限制显示前5个错误
-
-            # 使用安全发送方法，自动处理Markdown错误
-            await self.safe_send_message(chat_id, combined_summary)
+            await self.safe_send_message(chat_id, stats_text, parse_mode=ParseMode.MARKDOWN)
             result['summary_sent'] = True
 
             self.logger.info(f"Daily summary sent to chat {chat_id}, result: {result}")
@@ -571,6 +642,70 @@ class TelegramBot:
                 self.logger.error(f"Failed to send error message to chat {chat_id}: {send_error}")
 
             return result
+
+    async def safe_send_and_split(self, chat_id, text, use_markdown=True):
+        """
+        安全发送消息，自动分割超过长度的消息
+        每条消息限制在1000字符以内
+        默认使用Markdown格式，但可以禁用
+        """
+        # 如果消息已经小于1000，直接发送
+        if len(text) <= 1000:
+            if use_markdown:
+                return await self.safe_send_message(chat_id, text, parse_mode=ParseMode.MARKDOWN)
+            else:
+                return await self.safe_send_message(chat_id, text)
+
+        # 否则分割消息
+        message_parts = []
+        current_part = ""
+        lines = text.split('\n')
+
+        for line in lines:
+            # 如果添加这行会超过1000字符，先保存当前部分
+            if len(current_part) + len(line) + 1 > 1000:  # +1 是换行符
+                if current_part:
+                    message_parts.append(current_part)
+                    current_part = ""
+
+            # 如果单行就超过1000字符，需要强制分割
+            if len(line) > 1000:
+                # 添加当前部分（如果有）
+                if current_part:
+                    message_parts.append(current_part)
+                    current_part = ""
+
+                # 强制分割长行
+                for i in range(0, len(line), 1000):
+                    message_parts.append(line[i:i+1000])
+            else:
+                # 正常添加行
+                if current_part:
+                    current_part += '\n' + line
+                else:
+                    current_part = line
+
+        # 添加最后一部分
+        if current_part:
+            message_parts.append(current_part)
+
+        # 发送所有部分
+        sent_messages = []
+        for i, part in enumerate(message_parts):
+            try:
+                if use_markdown:
+                    msg = await self.safe_send_message(chat_id, part, parse_mode=ParseMode.MARKDOWN)
+                else:
+                    msg = await self.safe_send_message(chat_id, part)
+
+                if msg:
+                    sent_messages.append(msg)
+                if i < len(message_parts) - 1:
+                    await asyncio.sleep(0.5)  # 避免发送太快
+            except Exception as e:
+                self.logger.error(f"Failed to send message part {i+1}: {e}")
+
+        return sent_messages[0] if sent_messages else None
 
     def _filter_messages_by_time_range(self, messages: List[Dict[str, Any]], start_time: str, end_time: str) -> List[Dict[str, Any]]:
         """根据时间范围过滤消息"""
