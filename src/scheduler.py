@@ -69,14 +69,6 @@ class DailySummaryScheduler:
                 execution_report['errors'].append(error_msg)
                 return execution_report
 
-            # 通知所有群组，每日总结任务已开始
-            for chat_id in chat_ids:
-                try:
-                    await self.bot_instance.safe_send_message(chat_id, f"🔔 **每日总结任务已启动**\n\n⏰ 计划时间: {config.daily_summary_time}\n🤖 任务开始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n📊 正在为群组生成今日总结...")
-                except Exception as e:
-                    self.logger.error(f"Failed to send start notification to chat {chat_id}: {e}")
-                    execution_report['errors'].append(f"Chat {chat_id}: Failed to send start notification: {e}")
-
             # 为每个群组生成总结
             for idx, chat_id in enumerate(chat_ids, 1):
                 try:
@@ -87,12 +79,6 @@ class DailySummaryScheduler:
                     try:
                         # 尝试获取群组名称等信息（如果可用）
                         pass
-                    except:
-                        pass
-
-                    # 发送处理中通知
-                    try:
-                        await self.bot_instance.safe_send_message(chat_id, f"🔄 **[{idx}/{len(chat_ids)}]** 正在处理当前群组总结...")
                     except:
                         pass
 
@@ -138,39 +124,6 @@ class DailySummaryScheduler:
             execution_report['duration_seconds'] = (execution_report['end_time'] - execution_report['start_time']).total_seconds()
 
             self.logger.info(f"Daily summary task completed: {execution_report}")
-
-            # 向所有群组发送执行总结报告
-            total_processed = execution_report['successful'] + execution_report['partial'] + execution_report['failed']
-            report_message = f"""
-📊 **每日总结任务执行报告**
-
-⏰ 执行时间: {execution_report['start_time'].strftime('%Y-%m-%d %H:%M:%S')}
-⏱ 总耗时: {execution_report['duration_seconds']:.1f} 秒
-📋 处理群组: 共 {execution_report['total_chats']} 个
-
-📈 **执行结果:**
-✅ 完全成功: {execution_report['successful']} 个群组
-⚠️ 部分成功: {execution_report['partial']} 个群组
-❌ 处理失败: {execution_report['failed']} 个群组
-📭 无消息记录: {execution_report['no_messages']} 个群组
-"""
-
-            if execution_report['errors']:
-                report_message += f"\n🐛 **错误/警告数**: {len(execution_report['errors'])} 条"
-
-            report_message += f"\n📊 **成功率**: {(execution_report['successful'] / execution_report['total_chats'] * 100):.1f}%"
-
-            if total_processed > 0:
-                report_message += f"\n\n✅ **任务状态**: {'执行成功' if execution_report['failed'] == 0 else '部分失败'}"
-            else:
-                report_message += f"\n\n❌ **任务状态**: 执行失败"
-
-            # 向所有群组发送最终报告
-            for chat_id in chat_ids:
-                try:
-                    await self.bot_instance.safe_send_message(chat_id, report_message)
-                except Exception as e:
-                    self.logger.error(f"Failed to send execution report to chat {chat_id}: {e}")
 
             return execution_report
 
