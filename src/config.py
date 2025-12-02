@@ -52,7 +52,8 @@ class Config:
                 "daily_summary_time": "23:59",
                 "manual_summary_message_count": 100,
                 "manual_summary_hours": 24,
-                "timezone_offset_hours": 0
+                "timezone_offset_hours": 0,
+                "daily_summary_period_interval": 30
             },
             "logging": {
                 "level": "INFO",

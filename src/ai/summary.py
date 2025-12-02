@@ -40,7 +40,7 @@ class AISummary:
                 f"{self.api_base}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=60  # 增加超时时间
+                timeout=3600  # 增加超时时间
             )
 
             print(f"Response status: {response.status_code}")

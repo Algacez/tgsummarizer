@@ -157,19 +157,23 @@ class TelegramBot:
 
 可用命令：
 /summary - 生成最近消息总结
+/dailysummary - 手动触发生成今日总结
 /stats - 查看今日统计
+/schedulerstatus - 查看调度器状态
 /help - 显示帮助信息
 
 机器人的功能：
 • 自动保存群组消息
 • 每日自动生成总结（配置文件中设置时间）
 • 支持手动总结最近消息
+• 支持手动触发每日总结
 • 可配置AI API地址和模型
-• 手动总结不显示时间标题
+• 详细的任务执行报告
 
 注意：
 • 每日总结时间需在配置文件中设置
 • 所有时间都使用计算机默认时间
+• 新增调度器状态和错误通知功能
         """
 
         await update.message.reply_text(welcome_text)
@@ -185,6 +189,8 @@ class TelegramBot:
 /summary - 总结最近消息（默认100条，24小时内）
 /summary [数量] - 总结指定数量的最近消息
 /summary [数量] [小时] - 总结指定数量和时间范围内的消息
+/dailysummary - 手动触发生成今日总结（按时段生成）
+/schedulerstatus - 查看调度器状态（显示下次执行时间、时区偏移、AI模型等信息）
 /stats - 显示今日群组统计信息
 /help - 显示此帮助信息
 
@@ -197,14 +203,19 @@ class TelegramBot:
 **功能特性：**
 • 每个群组消息独立存储
 • 每日自动生成总结（配置文件中设置时间）
+• 支持手动触发每日总结
 • 支持自定义API地址
 • 消息按日期分文件存储
-• 手动总结不显示时间标题
+• 总结按时段分类生成（早晨、下午、晚上、深夜）
+• 详细的执行报告和错误通知
+• 调度器状态监控（显示时区、AI模型配置）
 
 **注意：**
 • 每日总结时间需在配置文件的 daily_summary_time 字段中设置
 • 所有时间都使用计算机默认时间
 • 格式示例：\"23:59\" 或 \"08:00\"
+• 每日总结会发送到所有允许的群组
+• 任务执行过程中会发送详细的进度通知
         """
 
         await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
@@ -302,6 +313,104 @@ class TelegramBot:
             self.logger.error(f"Error in stats command: {e}")
             await update.message.reply_text(f"❌ 获取统计信息时出错: {str(e)}")
 
+    async def daily_summary_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """手动触发今日总结的命令处理器"""
+        if not self._should_respond(update, context):
+            return
+
+        chat_id = update.effective_chat.id
+
+        # 发送状态消息
+        status_message = await update.message.reply_text("🔄 正在执行今日总结任务，请稍候...")
+        status_message_id = status_message.message_id
+
+        try:
+            # 调用发送每日总结的方法，并获取结果报告
+            result = await self.send_daily_summary(chat_id)
+
+            # 删除状态消息
+            await self.delete_message_safely(chat_id, status_message_id)
+
+            # 根据结果发送简短的反馈
+            if result.get('status') == 'success':
+                await update.message.reply_text(f"✅ 每日总结任务完成!")
+            elif result.get('status') == 'partial':
+                await update.message.reply_text(f"⚠️ 每日总结部分完成，有 {len(result.get('errors', []))} 个错误")
+            elif result.get('status') == 'no_messages':
+                await update.message.reply_text(f"ℹ️ 今日没有消息记录")
+            else:
+                await update.message.reply_text(f"❌ 生成总结时发生错误")
+
+        except Exception as e:
+            self.logger.error(f"Error in daily_summary command: {e}")
+            await self.delete_message_safely(chat_id, status_message_id)
+            await update.message.reply_text(f"❌ 生成今日总结时出错: {str(e)}")
+
+    async def scheduler_status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """查询调度器状态的命令"""
+        if not self._should_respond(update, context):
+            return
+
+        chat_id = update.effective_chat.id
+
+        try:
+            is_running = self.scheduler.running if self.scheduler else False
+            target_time = config.daily_summary_time if hasattr(config, 'daily_summary_time') else "未配置"
+            is_enabled = config.daily_summary_enabled if hasattr(config, 'daily_summary_enabled') else False
+            timezone_offset = config.timezone_offset_hours if hasattr(config, 'timezone_offset_hours') else 0
+            ai_model = config.model if hasattr(config, 'model') else "未配置"
+            api_base = config.api_base if hasattr(config, 'api_base') else "未配置"
+
+            from datetime import datetime, timedelta
+
+            # 计算下次执行时间
+            next_time_str = "N/A"
+            if is_running and is_enabled:
+                try:
+                    seconds_remaining = self.scheduler.seconds_until_target_time()
+                    next_time = datetime.now() + timedelta(seconds=seconds_remaining)
+                    next_time_str = next_time.strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    pass
+
+            # 格式化时区偏移显示
+            if timezone_offset >= 0:
+                tz_display = f"UTC+{timezone_offset}"
+            else:
+                tz_display = f"UTC{timezone_offset}"
+
+            status_text = f"""
+🤖 调度器状态报告
+
+📊 运行状态:
+{'🟢 正在运行' if is_running else '🔴 已停止'}
+⏰ 计划时间: {target_time}
+{'✅ 已启用' if is_enabled else '❌ 已禁用'}
+
+⏲ 时区设置:
+🌍 时区偏移: {tz_display} 小时
+⚠️ 注意: 调度器按本地时间运行
+
+🤖 AI 配置:
+📝 模型: {ai_model}
+🔗 API地址: {api_base[:30]}{'...' if len(api_base) > 30 else ''}
+
+🗓 下次执行:
+{next_time_str if is_running and is_enabled else 'N/A (调度器未运行或未启用)'}
+
+ℹ️ 使用说明:
+• 调度器使用本地计算机时间
+• 每日总结将在计划时间自动触发
+• 使用 /dailysummary 可手动触发今日总结
+• 时区偏移仅用于日志记录
+            """
+
+            await update.message.reply_text(status_text)
+
+        except Exception as e:
+            self.logger.error(f"Error getting scheduler status: {e}")
+            await update.message.reply_text(f"❌ 获取调度器状态时出错: {str(e)}")
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message_info = self.extract_message_info(update)
 
@@ -316,21 +425,58 @@ class TelegramBot:
         except Exception as e:
             self.logger.error(f"Error saving message: {e}")
 
-    async def send_daily_summary(self, chat_id: int) -> None:
+    async def send_daily_summary(self, chat_id: int) -> dict:
+        """
+        发送每日总结，返回详细的执行报告
+        返回值: {
+            'status': 'success'|'partial'|'failed'|'no_messages',
+            'total_messages': int,
+            'periods_processed': int,
+            'errors': [error_messages],
+            'summary_sent': bool
+        }
+        """
+
+        # 起始状态通知
+        start_time = datetime.now()
+        check_point_msg = await self.safe_send_message(chat_id, f"🔔 **每日总结任务启动**\n⏰ 开始时间: {start_time.strftime('%H:%M:%S')}\n📊 正在处理消息并生成总结...")
+        check_point_msg_id = check_point_msg.message_id if check_point_msg else None
+
+        result = {
+            'status': 'failed',
+            'total_messages': 0,
+            'periods_processed': 0,
+            'errors': [],
+            'summary_sent': False
+        }
+
         try:
             # 使用考虑偏移量的本地时间获取当天的所有消息
             local_now = get_local_time_with_offset()
             local_today = local_now.date()
 
+            await self.safe_send_message(chat_id, f"⏳ **阶段1: 加载消息**\n📅 处理日期: {local_today}\n正在加载今日消息...")
+
             messages = self.storage.load_messages(chat_id, local_today)
             self.logger.info(f"Loaded {len(messages)} messages for chat {chat_id} on {local_today}")
+
+            await self.safe_send_message(chat_id, f"✅ 加载完成! 共 {len(messages)} 条消息")
 
             if not messages:
                 # 发送无消息提示
                 date_str = local_today.strftime("%Y-%m-%d")
                 no_msg_summary = f"📊 **群组每日总结** ({date_str})\n\n📭 今日没有消息记录"
                 await self.safe_send_message(chat_id, no_msg_summary)
-                return
+                result['status'] = 'no_messages'
+                result['summary_sent'] = True
+
+                # 删除检查点消息
+                if check_point_msg_id:
+                    await self.delete_message_safely(chat_id, check_point_msg_id)
+
+                return result
+
+            result['total_messages'] = len(messages)
 
             # 按时间段分批总结（分为4个时段：早上、下午、晚上、深夜）
             time_periods = [
@@ -341,37 +487,62 @@ class TelegramBot:
             ]
 
             period_summaries = []
-            total_messages = 0
+            total_messages_processed = 0
             error_messages = []
 
-            for period in time_periods:
+            await self.safe_send_message(chat_id, f"⏳ **阶段2: 分时段生成总结**\n共 {len(time_periods)} 个时段...")
+
+            for i, period in enumerate(time_periods, 1):
                 try:
+                    await self.safe_send_message(chat_id, f"💬 **正在处理时段 {i}/{len(time_periods)}**: {period['name']} ({period['start']}-{period['end']})")
+
                     period_messages = self._filter_messages_by_time_range(messages, period["start"], period["end"])
+
                     if period_messages:
+                        await self.safe_send_message(chat_id, f"  └─ 发现 {len(period_messages)} 条消息，正在请求AI生成总结...")
+
                         # 不再限制消息数量，让AI处理所有消息以生成更全面的总结
                         summary = self.ai_summary.generate_period_summary(period_messages, period['name'])
+
                         if summary:
                             if summary.startswith("错误"):
                                 # 记录错误但继续处理其他时段
                                 error_msg = f"{period['name']}时段总结错误: {summary}"
                                 error_messages.append(error_msg)
+                                result['errors'].append(error_msg)
                                 self.logger.error(f"Summary error for chat {chat_id}, period {period['name']}: {summary}")
+                                await self.safe_send_message(chat_id, f"  ❌ 总结生成失败: {summary[:100]}")
                             elif not summary.startswith("没有消息"):
                                 period_summary = f"**{period['name']} ({period['start']}-{period['end']})**\n{summary}"
                                 period_summaries.append(period_summary)
-                                total_messages += len(period_messages)
+                                total_messages_processed += len(period_messages)
+                                result['periods_processed'] += 1
+                                await self.safe_send_message(chat_id, f"  ✅ 总结生成成功! ({len(summary)} 字符)")
+                            else:
+                                await self.safe_send_message(chat_id, f"  ℹ️ 该时段无有效讨论")
                         else:
                             error_msg = f"{period['name']}时段总结返回空结果"
                             error_messages.append(error_msg)
+                            result['errors'].append(error_msg)
                             self.logger.warning(f"Empty summary for chat {chat_id}, period {period['name']}")
+                            await self.safe_send_message(chat_id, f"  ❌ 返回空结果")
 
                         # 在每个时间段总结请求后添加延迟
                         await asyncio.sleep(config.daily_summary_period_interval)
+                    else:
+                        await self.safe_send_message(chat_id, f"  ℹ️ 无消息")
+
                 except Exception as e:
                     error_msg = f"{period['name']}时段处理异常: {str(e)}"
                     error_messages.append(error_msg)
+                    result['errors'].append(error_msg)
                     self.logger.error(f"Error processing period {period['name']} for chat {chat_id}: {e}")
+                    await self.safe_send_message(chat_id, f"  ❌ 异常错误: {str(e)}")
                     continue
+
+            result['total_messages'] = total_messages_processed
+
+            await self.safe_send_message(chat_id, f"⏳ **阶段3: 生成活跃用户统计**")
 
             # 生成活跃成员排行
             user_stats = {}
@@ -382,10 +553,12 @@ class TelegramBot:
             # 排序获取前10名活跃用户
             top_users = sorted(user_stats.items(), key=lambda x: x[1], reverse=True)[:10]
 
+            await self.safe_send_message(chat_id, f"✅ 统计完成! 今日活跃用户: {len(user_stats)} 人")
+
             # 合并所有时段的总结
             date_str = local_today.strftime("%Y-%m-%d")
             header = f"📊 **群组每日总结** ({date_str})\n"
-            header += f"📝 消息总数: {total_messages} 条\n"
+            header += f"📝 消息总数: {total_messages_processed} 条\n"
             header += f"👥 活跃用户: {len(user_stats)} 人\n\n"
 
             # 添加活跃成员排行
@@ -398,25 +571,73 @@ class TelegramBot:
             # 构建最终总结内容
             if period_summaries:
                 combined_summary = header + "\n\n".join(period_summaries)
+                result['status'] = 'success' if not error_messages else 'partial'
             else:
                 combined_summary = header.rstrip() + "\n\n📭 今日无有效话题讨论"
+                result['status'] = 'success' if not error_messages else 'partial'
 
             # 添加错误信息（如果有）
             if error_messages:
                 combined_summary += "\n\n⚠️ **处理过程中遇到的问题:**\n" + "\n".join([f"- {err}" for err in error_messages[:5]])  # 限制显示前5个错误
 
+            # 删除检查点消息
+            if check_point_msg_id:
+                await self.delete_message_safely(chat_id, check_point_msg_id)
+
+            await self.safe_send_message(chat_id, f"⏳ **阶段4: 发送总结**")
+
             # 使用安全发送方法，自动处理Markdown错误
             await self.safe_send_message(chat_id, combined_summary)
-            self.logger.info(f"Daily summary sent to chat {chat_id}")
+            result['summary_sent'] = True
+
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+
+            # 发送完成报告
+            report = f"""
+✅ **每日总结任务完成**
+
+⏱ 总耗时: {duration:.1f} 秒
+📊 处理消息: {result['total_messages']} 条
+💬 成功时段: {result['periods_processed']}/{len(time_periods)}
+✅ 状态: {"全部成功" if result['status'] == 'success' else "部分成功" if result['status'] == 'partial' else "失败"}
+"""
+
+            if result['errors']:
+                report += f"\n⚠️ 错误数: {len(result['errors'])} 个"
+
+            await self.safe_send_message(chat_id, report)
+
+            self.logger.info(f"Daily summary sent to chat {chat_id}, result: {result}")
+
+            return result
 
         except Exception as e:
             error_msg = f"生成每日总结时发生严重错误: {str(e)}"
             self.logger.error(f"Error sending daily summary to chat {chat_id}: {e}")
+
+            result['errors'].append(error_msg)
+
             try:
-                # 尝试发送错误信息到群组
-                await self.safe_send_message(chat_id, f"❌ **每日总结生成失败**\n\n{error_msg}")
+                # 删除检查点消息
+                if check_point_msg_id:
+                    await self.delete_message_safely(chat_id, check_point_msg_id)
+
+                # 发送错误信息到群组
+                error_notification = f"""
+❌ **每日总结生成失败**
+
+🕒 开始时间: {start_time.strftime('%H:%M:%S')}
+⚠️ 错误: {str(e)}
+"""
+                if result['errors']:
+                    error_notification += "\n📋 详细错误:\n" + "\n".join([f"- {err}" for err in result['errors'][:5]])
+
+                await self.safe_send_message(chat_id, error_notification)
             except Exception as send_error:
                 self.logger.error(f"Failed to send error message to chat {chat_id}: {send_error}")
+
+            return result
 
     def _filter_messages_by_time_range(self, messages: List[Dict[str, Any]], start_time: str, end_time: str) -> List[Dict[str, Any]]:
         """根据时间范围过滤消息"""
@@ -471,6 +692,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("summary", self.summary_command))
+        self.application.add_handler(CommandHandler("dailysummary", self.daily_summary_command))
+        self.application.add_handler(CommandHandler("schedulerstatus", self.scheduler_status_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
 
         # 处理文本消息
